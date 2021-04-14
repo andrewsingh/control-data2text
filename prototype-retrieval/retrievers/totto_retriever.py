@@ -1,18 +1,22 @@
-from dataset import Dataset
 import datasets
+import spacy
+
+from spacy.symbols import ORTH
+from retriever import Retriever
+from pathlib import Path
 
 
-class TottoDataset(dataset.Dataset):
+class TottoRetriever(Retriever):
 
-    def __init__(self, name, split, data_dir, proto_name, index_path, edit_dist_thresh=50, edit_dist_index_size=50, retrieval_k=5, sentence_encoder_name="stsb-distilbert-base"):
-        super().__init__(name, split, data_dir, proto_name, index_path, retrieval_k)
-        self.edit_dist_thresh = edit_dist_thresh
-        self.edit_dist_index_size = edit_dist_index_size
-        self.retrieval_k = retrieval_k
-        self.sentence_encoder_name = sentence_encoder_name
+    def __init__(self, split, index_path, data_dir="{}/transformers/examples/seq2seq/test_data/totto".format(Retriever.root), proto_data_dir=None):
+        if not proto_data_dir:
+            proto_data_dir = str(Path(Path(data_dir).parent, "prototypes"))
+        super().__init__(split, index_path, data_dir, proto_data_dir)
+        self.nlp = spacy.load("en_core_web_lg")
+        self.nlp.tokenizer.add_special_case(Retriever.mask_str, [{ORTH: Retriever.mask_str}])
 
 
-    def mask_target(source, target):
+    def mask_target(self, source, target):
         def hasNumbers(s):
             return any(char.isdigit() for char in s)
 

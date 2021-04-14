@@ -1,36 +1,31 @@
 import datasets
 import os
-import spacy
 import editdistance
 import random
-from spacy.symbols import ORTH
+
 from pathlib import Path
 from tqdm import tqdm
 from collections import defaultdict
 
 
-class Dataset():
+class Retriever():
 
     mask_str = "[MASK]"
+    root = os.getenv("ROOT")
     
-    def __init__(self, name, split, data_dir, proto_name, index_path, gpu=None, num_proc=1):
+    def __init__(self, split, index_path, data_dir, proto_data_dir):
+        self.split = split
         self.src_file = Path(data_dir).joinpath(split + ".source")
         self.tgt_file = Path(data_dir).joinpath(split + ".target")
         self.index_path = index_path
-        self.proto_data_dir = data_dir + proto_name
-        self.retrieval_k = None
-        self.sentence_encoder_name = None
-        self.nlp = spacy.load("en_core_web_lg")
-        self.nlp.tokenizer.add_special_case(Dataset.mask_str, [{ORTH: Dataset.mask_str}])
-        self.gpu = gpu
-        self.num_proc = num_proc
+        self.proto_data_dir = proto_data_dir
         
 
     def mask_target(self, source, target):
         pass
 
 
-    def mask_dataset(self):
+    def mask_dataset(self, num_proc=1):
         data_sep = datasets.load_dataset("text", data_files={"train": self.src_file, "test": self.tgt_file})
         data_dict = {"source": data_sep["train"]["text"], "target": data_sep["test"]["text"]}
         data = datasets.Dataset.from_dict(data_dict)
@@ -40,14 +35,14 @@ class Dataset():
             split_masked_target = masked_target.split()
             return {"masked_target": masked_target, "split_masked_target": split_masked_target}
 
-        masked_data = data.map(mask_and_split, num_proc=self.num_proc)
+        masked_data = data.map(mask_and_split, num_proc=num_proc)
         masked_data.save_to_disk(self.index_path)
 
 
-    def add_edit_dist_maps(self, edit_dist_index_size=50, edit_dist_thresh=50):
+    def add_edit_dist_maps(self, edit_dist_thresh=50, edit_dist_index_size=50):
         data = datasets.load_from_disk(self.index_path)
         
-        def add_edit_dist_map(example):
+        def add_edit_dist_map(example, num_proc=1):
             dist_map = defaultdict(lambda: [])
             a = example["split_masked_target"]
             for i, b in enumerate(data["split_masked_target"]):
@@ -59,25 +54,25 @@ class Dataset():
             total_examples = 0
             for (i, (_, indices)) in enumerate(dist_list):
                 total_examples += len(indices)
-                if total_examples >= self.edit_dist_thresh:
+                if total_examples >= edit_dist_thresh:
                     trunc_idx = i + 1
                     break
             dist_list = dist_list[:trunc_idx]
-            edit_dist_map = [None] * (self.edit_dist_index_size + 1)
+            edit_dist_map = [None] * (edit_dist_index_size + 1)
             for dist, indices in dist_list:
-                if dist <= self.edit_dist_index_size:
+                if dist <= edit_dist_index_size:
                     edit_dist_map[dist] = indices
             return {"{}_edit_dist_map".format(compare_split): edit_dist_map}
 
-        data = data.map(add_edit_dist_maps, num_proc=self.num_proc)
+        data = data.map(add_edit_dist_maps, num_proc=num_proc)
         data.save_to_disk(self.index_path)
 
 
-    def add_embed_index(self, feature):
+    def add_embed_index(self, feature, sentence_encoder_name="stsb-distilbert-base", gpu=None):
         data = datasets.load_from_disk(self.index_path)
-        sentence_encoder = SentenceTransformer("stsb-distilbert-base")
-        if self.gpu:
-            sentence_encoder.to("cuda:{}".format(self.gpu))
+        sentence_encoder = SentenceTransformer(sentence_encoder_name)
+        if gpu:
+            sentence_encoder.to("cuda:{}".format(gpu))
         
         def add_embed(example):
             feature_embed = sentence_encoder.encode(example[feature])
@@ -87,7 +82,7 @@ class Dataset():
         data.save_to_disk(self.index_path)
 
 
-    def create_train_set(max_edit_dist=None):
+    def create_train_set(self, retrieval_k=5, max_edit_dist=None):
         lines = []
         new_target_lines = []
         data = datasets.load_from_disk(self.index_path)
@@ -102,19 +97,15 @@ class Dataset():
         
         for i in tqdm(range(len(data))):
             chosen_indices = []
-            no_examples_indices = []
             for (edit_dist, indices) in list(enumerate(data[i]["edit_dist_map"]))[:max_edit_dist + 1]:
                 if indices:
-                    remaining_indices = self.retrieval_k - len(chosen_indices)
+                    remaining_indices = retrieval_k - len(chosen_indices)
                     if len(indices) <= remaining_indices:
                         chosen_indices += indices
                     else:
                         chosen_indices += random.sample(indices, remaining_indices)
                         break
             
-            if len(chosen_indices) == 0:
-                no_examples_indices.append(i)
-
             for proto_idx in chosen_indices:
                 lines.append(data[proto_idx]["target"] + " [SEP] " + data[i]["source"] + "\n")
 
@@ -128,12 +119,15 @@ class Dataset():
         if not os.path.exists(self.proto_data_dir):
             os.mkdir(self.proto_data_dir)
 
-        with open("{}/{}.source".format(self.proto_data_dir, split), "w+") as f:
+        with open("{}/{}.source".format(self.proto_data_dir, self.split), "w+") as f:
             f.writelines(lines)
 
-        with open("{}/{}.target".format(self.proto_data_dir, split), "w+") as f:
+        with open("{}/{}.target".format(self.proto_data_dir, self.split), "w+") as f:
             f.writelines(new_target_lines)
 
-        print("No prototypes retrieved for {} examples: {}".format(len(no_examples_indices), no_examples_indices))
+
+    def create_eval_set(self, eval_k):
+        pass
+
 
 

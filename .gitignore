@@ -3,4 +3,7 @@
 *__pycache__*
 
 DTG-SI/bert/e2e_preparation/*
-exp/*
+transformers/examples/*/test_data/*
+transformers/examples/*/exp/*
+prototype-retrieval/indexes/*
+commands.txt
