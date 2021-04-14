@@ -1,5 +1,6 @@
 import datasets
 import spacy
+import os
 
 from spacy.symbols import ORTH
 from retriever import Retriever
@@ -8,7 +9,7 @@ from pathlib import Path
 
 class TottoRetriever(Retriever):
 
-    def __init__(self, split, index_path, data_dir="{}/transformers/examples/seq2seq/test_data/totto".format(Retriever.root), proto_data_dir=None):
+    def __init__(self, split, index_path, data_dir=f"{os.getenv('CTRL_D2T_ROOT')}/transformers/examples/seq2seq/test_data/totto", proto_data_dir=None):
         if not proto_data_dir:
             proto_data_dir = str(Path(Path(data_dir).parent, "prototypes"))
         super().__init__(split, index_path, data_dir, proto_data_dir)

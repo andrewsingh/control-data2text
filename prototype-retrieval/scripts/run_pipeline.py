@@ -7,6 +7,7 @@ import sys
 sys.path.append("retrievers")
 
 from totto_retriever import TottoRetriever
+from e2e_retriever import E2ERetriever
 
 
 datasets.logging.set_verbosity_info()
@@ -31,11 +32,14 @@ def get_args():
 def main():
     args = get_args()
     if args.proto_name:
-        proto_data_dir = "{}/transformers/examples/seq2seq/test_data/{}".format(os.getenv("ROOT"), args.proto_name)
+        proto_data_dir = f"{os.getenv('CTRL_D2T_ROOT')}/transformers/examples/seq2seq/test_data/{args.proto_name}"
     else:
         proto_data_dir = None
     
-    retriever = TottoRetriever(args.split, args.index, proto_data_dir=proto_data_dir)
+    if args.retriever == "e2e":
+        retriever = E2ERetriever(args.split, args.index, proto_data_dir=proto_data_dir)
+    elif args.retriever == "totto":
+        retriever = TottoRetriever(args.split, args.index, proto_data_dir=proto_data_dir)
 
     if args.create_train:
         retriever.create_train_set(retrieval_k=args.retrieval_k, max_edit_dist=args.max_edit_dist)

@@ -2,6 +2,7 @@ import datasets
 import os
 import editdistance
 import random
+import json
 
 from pathlib import Path
 from tqdm import tqdm
@@ -11,7 +12,6 @@ from collections import defaultdict
 class Retriever():
 
     mask_str = "[MASK]"
-    root = os.getenv("ROOT")
     
     def __init__(self, split, index_path, data_dir, proto_data_dir):
         self.split = split
@@ -82,9 +82,11 @@ class Retriever():
         data.save_to_disk(self.index_path)
 
 
-    def create_train_set(self, retrieval_k=5, max_edit_dist=None):
+    def create_train_set(self, retrieval_k=5, max_edit_dist=None, seed=42):
+        random.seed(seed)
         lines = []
         new_target_lines = []
+        examples = []
         data = datasets.load_from_disk(self.index_path)
 
         if "edit_dist_map" not in data[0]:
@@ -107,23 +109,17 @@ class Retriever():
                         break
             
             for proto_idx in chosen_indices:
-                lines.append(data[proto_idx]["target"] + " [SEP] " + data[i]["source"] + "\n")
-
-            entry_target = data[i]["target"]
-            num_targets = len(chosen_indices)
-            if "\n" in entry_target:
-                new_target_lines += ([entry_target] * num_targets)
-            else:
-                new_target_lines += ([entry_target + "\n"] * num_targets)
+                example = {}
+                example["source"] = (data[proto_idx]["target"] + " [SEP] " + data[i]["source"]).strip()
+                example["target"] = data[i]["target"].strip()
+                examples.append(example)
 
         if not os.path.exists(self.proto_data_dir):
             os.mkdir(self.proto_data_dir)
 
-        with open("{}/{}.source".format(self.proto_data_dir, self.split), "w+") as f:
-            f.writelines(lines)
-
-        with open("{}/{}.target".format(self.proto_data_dir, self.split), "w+") as f:
-            f.writelines(new_target_lines)
+        with open(f"{self.proto_data_dir}/{self.split}.json", "w+") as f:
+            for example in examples:
+                f.write(json.dumps(example) + "\n")
 
 
     def create_eval_set(self, eval_k):

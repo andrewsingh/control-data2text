@@ -1,9 +1,18 @@
 *.vscode*
 *.DS_Store*
 *__pycache__*
+*.csv
+*.json
+*.jsonl
 
+commands.txt
+
+DTG-SI/e2e_data/*
 DTG-SI/bert/e2e_preparation/*
+
+google-language/language/totto/temp/*
+
 transformers/examples/*/test_data/*
 transformers/examples/*/exp/*
+
 prototype-retrieval/indexes/*
-commands.txt

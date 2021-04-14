@@ -29,13 +29,7 @@ from language.totto.baseline_preprocessing import preprocess_utils
 import six
 
 flags.DEFINE_string("input_path", None, "Input json file.")
-
 flags.DEFINE_string("output_path", None, "Output directory.")
-
-flags.DEFINE_string("side", None, "'source' or 'target'")
-
-flags.DEFINE_integer("examples_to_visualize", 100,
-                     "Number of examples to visualize.")
 
 FLAGS = flags.FLAGS
 
@@ -67,45 +61,23 @@ def _generate_processed_examples(input_path):
               table_page_title=table_page_title,
               table_section_title=table_section_title))
 
-      linearized_examples.append(subtable_metadata_str + "\n")
+      linearized_example = {}
+      linearized_example["source"] = subtable_metadata_str
+      linearized_example["target"] = json_example["sentence_annotations"][0]["final_sentence"]
+      linearized_examples.append(linearized_example)
 
   print("Num examples processed: %d" % len(linearized_examples))
   return linearized_examples
 
 
-def _generate_train_targets(input_path):
-  targets = []
-  multiple_annotations_count = 0
-  with open(input_path, "r", encoding="utf-8") as input_file:
-    for line in input_file:
-      if len(targets) % 1000 == 0:
-        print("Num examples processed: %d" % len(targets))
-
-      line = six.ensure_text(line, "utf-8")
-      json_example = json.loads(line)
-      annotations = json_example["sentence_annotations"]
-      # if len(annotations) != 1:
-      #   print("{} annotations".format(len(annotations)))
-      #   multiple_annotations_count += 1
-
-      targets.append(annotations[0]["final_sentence"] + "\n")
-
-  print("{} examples with multiple annotations".format(multiple_annotations_count))
-  print("Num examples processed: %d" % len(targets))
-  return targets
-
-
 def main(_):
   input_path = FLAGS.input_path
   output_path = FLAGS.output_path
-  side = FLAGS.side
-  if side == "source":
-    outputs = _generate_processed_examples(input_path)
-  elif side == "target":
-    outputs = _generate_train_targets(input_path)
-  with open(output_path, "w", encoding="utf-8") as f:
-    f.writelines(outputs)
-
+  processed_json_examples = _generate_processed_examples(input_path)
+  with open(output_path, "w+", encoding="utf-8") as f:
+    for json_example in processed_json_examples:
+      f.write(json.dumps(json_example) + "\n")
+  
 
 if __name__ == "__main__":
   app.run(main)
