@@ -1,1 +1,6 @@
+*.vscode*
+*.DS_Store*
+*__pycache__*
+
 DTG-SI/bert/e2e_preparation/*
+exp/*
