@@ -2,7 +2,6 @@ import os
 
 import sys
 import nltk
-import pathlib
 
 from utils_e2e_eval import *
 from absl import app
@@ -23,6 +22,8 @@ FLAGS = flags.FLAGS
 
 def prepare_data(refs_path, preds_path, output_path):
     print("Masking references and predicitons")
+    if not output_path:
+        output_path = os.path.dirname(preds_path)
     refs = read_sents_from_file(refs_path)
     refs = [[ref] for ref in refs]
     with open(preds_path, "r") as f:
@@ -30,9 +31,9 @@ def prepare_data(refs_path, preds_path, output_path):
     masked_refs, masked_preds = mask_refs_preds(refs, preds)
     refs_name = os.path.basename(refs_path)
     preds_name = os.path.basename(preds_path)
-    with open(f"{output_path}/mask_{refs_name}"):
+    with open(f"{output_path}/mask_{refs_name}", "w+") as f:
         f.writelines([ref + "\n" for ref in masked_refs])
-    with open(f"{output_path}/mask_{preds_name}"):
+    with open(f"{output_path}/mask_{preds_name}", "w+") as f:
         f.writelines([ref + "\n" for ref in masked_preds])
     print(f"Wrote masked references and predictions to directory: {output_path}")
     

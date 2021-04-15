@@ -28,32 +28,19 @@ from absl import app
 from absl import flags
 # pylint: disable=intest-name, too-many-locals, too-many-statements
 nltk.download('punkt')
-flags.DEFINE_string(
-    "task", "SST",
-    "The task to run experiment on. ")
-flags.DEFINE_string(
-    "vocab_file", 'bert/bert_config/all.vocab.txt',
-    "The one-wordpiece-per-line vocabary file directory.")
-flags.DEFINE_integer(
-    "max_seq_length", 128,
-    "The maxium length of sequence, longer sequence will be trimmed.")
-flags.DEFINE_string(
-    "tfrecords_output_dir", 'bert/e2e_preparation',
-    "The output directory where the TFRecords files will be generated.")
-flags.DEFINE_bool(
-    "do_lower_case", False,
-    "Whether to lower case the input text. Should be True for uncased "
-    "models and False for cased models.")
+
 flags.DEFINE_string(
     "input_path", None,
     "The path to the predictions file")
 flags.DEFINE_string(
     "output_path", None,
     "The directory to output csv files")
+flags.DEFINE_string(
+    "e2e_data_dir", f"{os.getenv('CTRL_D2T_ROOT')}/DTG-SI/e2e_data/val",
+    "The data directory")
 
 FLAGS = flags.FLAGS
 
-e2e_data_dir = "e2e_data/val"
 refs = ['', '_ref']
 
 
@@ -74,16 +61,11 @@ def prepare_data(input_path, output_path):
     # Loads data
     print("Preparing predictions for content evaluation")
 
-    # task_datasets_rename = {
-    #     "SST": "E2E",
-    # }
-    
+    e2e_data_dir = FLAGS.e2e_data_dir
     data_dir = 'bert/{}'.format('e2e_preparation')
     output_path_1 = f"{output_path}/validation_preds_content.1.tsv"
     output_path_2 = f"{output_path}/validation_preds_content.2.tsv"
-    # if FLAGS.task.upper() in task_datasets_rename:
-    #     data_dir = 'data/{}'.format(
-    #         task_datasets_rename[FLAGS.task])
+
 
     #TO DO:Prepare data for the transformer classifier
     #i.e. Concat x' with y and see whether x' was compressed in y

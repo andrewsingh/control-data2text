@@ -466,12 +466,11 @@ def main():
         return preds, labels
 
     def postprocess_totto_preds(preds):
-        preds = [pred.strip() for pred in preds]
-        return preds
+        return [pred.strip() for pred in preds]
 
     def postprocess_e2e_preds(preds):
-        preds = [" ".join(word_tokenize(pred.strip())) for pred in preds]
-        return preds
+        print("Post-processing E2E predictions")
+        return [" ".join(word_tokenize(pred.strip())) for pred in preds]
 
 
     def compute_default_metrics(eval_preds):
@@ -530,13 +529,18 @@ def main():
         os.remove(preds_file_path)
         return metric_dict
 
-
     
     def compute_e2e_metrics(eval_preds):
+        gpu = "0"
+        device = f"cuda:{gpu}"
         print("Computing E2E evaluation metrics")
-        blue_metric = load_metric("bleu")
-        gpu = f'cuda:{training_args.device}'
-        print(f"GPU: {gpu}")
+        print(f"GPU: {device}")
+
+        last_checkpoint = get_last_checkpoint(training_args.output_dir)
+        if last_checkpoint:
+            output_dir = last_checkpoint
+        else:
+            output_dir = training_args.output_dir
         
         def compute_accuracy(path, correct_label):
             num_correct = 0
@@ -553,18 +557,18 @@ def main():
                 refs = [line.strip() for line in f]
             with open(preds_path, "r") as f:
                 preds = [line.strip() for line in f]
-            return round(corpus_bleu(refs, [preds], force=True).score, 4)
+            return round(corpus_bleu(preds, [refs], force=True).score, 4)
 
         def compute_perplexity(preds):
-            tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+            e2e_lm_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
             e2e_lm = GPT2LMHeadModel.from_pretrained(f"{root_dir}/transformers/examples/language-modeling/exp/e2e_targets/gpt2-01/checkpoint-7458")
-            e2e_lm.to(gpu)
+            e2e_lm.to(device)
             ppls = []
             for pred in tqdm(preds):
-                inputs = tokenizer(pred, return_tensors='pt').to(gpu)
-                outputs = model(**inputs, labels=inputs['input_ids'])
+                inputs = e2e_lm_tokenizer(pred, return_tensors='pt').to(device)
+                outputs = e2e_lm(**inputs, labels=inputs['input_ids'])
                 ppls.append(math.exp(outputs.loss))
-            return sum(ppls) / len(ppls)
+            return round((sum(ppls) / len(ppls)), 4)
 
         preds, _ = eval_preds
         if isinstance(preds, tuple):
@@ -572,26 +576,32 @@ def main():
         decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
         decoded_preds = postprocess_e2e_preds(decoded_preds)
 
-        preds_file = f"{training_args.output_dir}/validation_preds.txt"
+        preds_file = f"{output_dir}/validation_preds.txt"
         with open(preds_file, "w+") as f:
             f.writelines([pred + "\n" for pred in decoded_preds])
 
-        prepare_data_path = f"{root_dir}/DTG-SI/prepare_data_csv.py"
+        prepare_preds_content_path = f"{root_dir}/DTG-SI/prepare_e2e_preds_content.py"
         predict_e2e_content_path = f"{root_dir}/transformers/examples/text-classification/predict_e2e_content.sh"
 
-        subprocess.run(["bash", "python", prepare_data_path, "--input_path", preds_file, "--output_path", training_args.output_dir])
-        subprocess.run(["bash", predict_e2e_content_path, training_args.device, training_args.output_dir, f"{training_args.output_dir}/validation_preds_content.1.csv"])
-        subprocess.run(["bash", predict_e2e_content_path, training_args.device, training_args.output_dir, f"{training_args.output_dir}/validation_preds_content.2.csv"])
+        print("Preparing predictions for content classifier")
+        subprocess.run(["python", prepare_preds_content_path, "--input_path", preds_file, "--output_path", output_dir])
 
-        inc_new = compute_accuracy(f"{training_args.output_dir}/test_results_validation_preds_content.1.csv", 1)
-        exc_old = compute_accuracy(f"{training_args.output_dir}/test_results_validation_preds_content.2.csv", 0)
+        print("Running content classifier")
+        subprocess.run(["bash", predict_e2e_content_path, gpu, output_dir, f"{output_dir}/validation_preds_content.1.csv"])
+        subprocess.run(["bash", predict_e2e_content_path, gpu, output_dir, f"{output_dir}/validation_preds_content.2.csv"])
+
+        inc_new = compute_accuracy(f"{output_dir}/test_results_validation_preds_content.1.csv.txt", 1)
+        exc_old = compute_accuracy(f"{output_dir}/test_results_validation_preds_content.2.csv.txt", 0)
         
-        prepare_data_style_path = f"{root_dir}/DTG-SI/prepare_data_style.py"
-        subprocess.run(["bash", "python", prepare_data_style_path, "--preds_path", preds_file, "--output_path", training_args.output_dir])
+        print("Preparing data for style evaluation")
+        prepare_preds_style_path = f"{root_dir}/DTG-SI/prepare_e2e_preds_style.py"
+        subprocess.run(["python", prepare_preds_style_path, "--preds_path", preds_file, "--output_path", output_dir])
 
-        m_bleu = compute_bleu(f"{training_args.output_dir}/mask_y_ref.valid.txt", f"{training_args.output_dir}/mask_validation_preds.txt")
+        print("Running style evaluation")
+        m_bleu = compute_bleu(f"{output_dir}/mask_y_ref.valid.txt", f"{output_dir}/mask_validation_preds.txt")
 
-        ppl = compute_perplexity(decoded_preds)
+        print("Running language model")
+        ppl = compute_perplexity([pred.replace("_", " ") for pred in decoded_preds])
 
         metric_dict = {
             "Inc-New": inc_new,
@@ -616,6 +626,8 @@ def main():
 
     if check_dataset("totto"):
         metrics_fn = compute_totto_metrics
+    elif check_dataset("e2e"):
+        metrics_fn = compute_e2e_metrics
     else:
         metrics_fn = compute_default_metrics
     

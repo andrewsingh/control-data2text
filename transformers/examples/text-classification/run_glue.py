@@ -505,7 +505,7 @@ def main():
             predictions = trainer.predict(test_dataset=test_dataset).predictions
             predictions = np.squeeze(predictions) if is_regression else np.argmax(predictions, axis=1)
 
-            output_test_file = os.path.join(training_args.output_dir, f"test_results_{task}.txt")
+            output_test_file = os.path.join(training_args.output_dir, f"test_results_{os.path.basename(data_args.test_file)}.txt")
             if trainer.is_world_process_zero():
                 with open(output_test_file, "w") as writer:
                     logger.info(f"***** Test results {task} *****")
