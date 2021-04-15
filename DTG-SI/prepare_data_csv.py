@@ -45,13 +45,10 @@ flags.DEFINE_bool(
     "Whether to lower case the input text. Should be True for uncased "
     "models and False for cased models.")
 flags.DEFINE_string(
-    "save_path", "e2e_output",
-    "The saved directory during training, such as `e2e_ours` or `e2e_s2s`.")
+    "input_path", None,
+    "The path to the predictions file")
 flags.DEFINE_string(
-    "step", "0",
-    "The training step  you'd like to evaluate")
-flags.DEFINE_string(
-    "output_path", f"{os.getenv('CTRL_D2T_ROOT')}/transformers/examples/text-classification/test_data/e2e_generations",
+    "output_path", None,
     "The directory to output csv files")
 
 FLAGS = flags.FLAGS
@@ -60,27 +57,30 @@ e2e_data_dir = "e2e_data/val"
 refs = ['', '_ref']
 
 
-def tsv_to_csv(input_file, output_file):
+def tsv_to_csv(input_file):
+    output_file = f"{os.path.splitext(input_file)[0]}.csv"
     output = []
     with open(input_file, 'r') as f:
         output = ['"sentence","label"\n'] + ['"{}","0"\n'.format(line.strip()) for line in f]
     with open(output_file, "w+") as f:
         f.writelines(output)
-    # os.remove(input_file)
+    os.remove(input_file)
 
 
-def prepare_data(save_path, step, output_path):
+def prepare_data(input_path, output_path):
     """
     Builds the model and runs.
     """
     # Loads data
-    print("Loading data")
+    print("Preparing predictions for content evaluation")
 
     # task_datasets_rename = {
     #     "SST": "E2E",
     # }
     
     data_dir = 'bert/{}'.format('e2e_preparation')
+    output_path_1 = f"{output_path}/validation_preds_content.1.tsv"
+    output_path_2 = f"{output_path}/validation_preds_content.2.tsv"
     # if FLAGS.task.upper() in task_datasets_rename:
     #     data_dir = 'data/{}'.format(
     #         task_datasets_rename[FLAGS.task])
@@ -91,7 +91,7 @@ def prepare_data(save_path, step, output_path):
     with open(os.path.join(e2e_data_dir, "x{}_type.valid.txt".format(ref)),'r') as f_type, \
         open(os.path.join(e2e_data_dir, "x{}_value.valid.txt".format(ref)),'r') as f_entry,\
         open(os.path.join(e2e_data_dir, "x{}_value.valid.txt".format(refs[0])), 'r') as f_entry_x,\
-        open("{}/ckpt/hypos.step{}.val.txt".format(save_path, step), 'r') as f_sent:
+        open(input_path, 'r') as f_sent:
 
         lines_type = f_type.readlines()
         lines_entry = f_entry.readlines()
@@ -104,14 +104,14 @@ def prepare_data(save_path, step, output_path):
                 entry_list = lines_entry[idx_line].strip('\n').split(' ')
                 if (lines_entry_x[idx_line].find(entry_list[idx_val]) == -1):
                     neg_samp = attr + ' : ' + entry_list[idx_val] + ' | ' + lines_sent[idx_line]
-                    with open("bert/e2e_preparation/{}.step{}.2.tsv".format(save_path, step), 'a') as f_w:
+                    with open(output_path_2, 'a') as f_w:
                         f_w.write(neg_samp)
 
     # Concat x with y and see whether x was compressed in y
     ref = refs[0]
     with open(os.path.join(e2e_data_dir, "x{}_type.valid.txt".format(ref)),'r') as f_type,\
         open(os.path.join(e2e_data_dir, "x{}_value.valid.txt".format(ref)),'r') as f_entry, \
-        open("{}/ckpt/hypos.step{}.val.txt".format(save_path, step), 'r') as f_sent:
+        open(input_path, 'r') as f_sent:
 
         lines_type = f_type.readlines()
         lines_entry = f_entry.readlines()
@@ -121,11 +121,12 @@ def prepare_data(save_path, step, output_path):
             for (idx_val, attr) in enumerate(line_type):
                 entry_list = lines_entry[idx_line].strip('\n').split(' ')
                 pos_samp = attr + ' : ' + entry_list[idx_val] + ' | ' + lines_sent[idx_line]
-                with open("bert/e2e_preparation/{}.step{}.1.tsv".format(save_path, step), 'a') as f_w:
+                with open(output_path_1, 'a') as f_w:
                     f_w.write(pos_samp)
 
-    tsv_to_csv(f"bert/e2e_preparation/{save_path}.step{step}.1.tsv", f"{output_path}/{save_path}.step{step}.1.csv")
-    tsv_to_csv(f"bert/e2e_preparation/{save_path}.step{step}.2.tsv", f"{output_path}/{save_path}.step{step}.2.csv")
+    print("Converting from TSV to CSV")
+    tsv_to_csv(output_path_1)
+    tsv_to_csv(output_path_2)
     print("Data preparation complete")
 
 
@@ -134,7 +135,7 @@ def prepare_data(save_path, step, output_path):
 def main(_):
     """ Starts the data preparation
     """
-    prepare_data(FLAGS.save_path, FLAGS.step, FLAGS.output_path)
+    prepare_data(FLAGS.input_path, FLAGS.output_path)
     
 
 

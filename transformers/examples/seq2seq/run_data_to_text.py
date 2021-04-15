@@ -23,8 +23,11 @@ import os
 import sys
 import subprocess
 import re
+import csv
+import math
 from dataclasses import dataclass, field
 from typing import Optional
+from tqdm import tqdm
 
 import nltk  # Here to have a nice missing dependency error message early on
 from nltk import word_tokenize
@@ -43,10 +46,13 @@ from transformers import (
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
     set_seed,
+    GPT2Tokenizer,
+    GPT2LMHeadModel
 )
 from transformers.file_utils import is_offline_mode
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
 from transformers.utils import check_min_version
+from sacrebleu import corpus_bleu
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -526,9 +532,11 @@ def main():
 
 
     
-
     def compute_e2e_metrics(eval_preds):
+        print("Computing E2E evaluation metrics")
         blue_metric = load_metric("bleu")
+        gpu = f'cuda:{training_args.device}'
+        print(f"GPU: {gpu}")
         
         def compute_accuracy(path, correct_label):
             num_correct = 0
@@ -540,44 +548,59 @@ def main():
                         num_correct += 1
                 return num_correct / len(data)
 
-        def compute_bleu(refs, preds):
-            bleu = sacrebleu.compute(predictions=preds, references=refs)
-            print("BLEU: {:.2%}".format(bleu))
-            return bleu
+        def compute_bleu(refs_path, preds_path):
+            with open(refs_path, "r") as f:
+                refs = [line.strip() for line in f]
+            with open(preds_path, "r") as f:
+                preds = [line.strip() for line in f]
+            return round(corpus_bleu(refs, [preds], force=True).score, 4)
+
+        def compute_perplexity(preds):
+            tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+            e2e_lm = GPT2LMHeadModel.from_pretrained(f"{root_dir}/transformers/examples/language-modeling/exp/e2e_targets/gpt2-01/checkpoint-7458")
+            e2e_lm.to(gpu)
+            ppls = []
+            for pred in tqdm(preds):
+                inputs = tokenizer(pred, return_tensors='pt').to(gpu)
+                outputs = model(**inputs, labels=inputs['input_ids'])
+                ppls.append(math.exp(outputs.loss))
+            return sum(ppls) / len(ppls)
 
         preds, _ = eval_preds
         if isinstance(preds, tuple):
             preds = preds[0]
         decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-        # Some simple post-processing
         decoded_preds = postprocess_e2e_preds(decoded_preds)
 
-        exp_name = training_args.output_dir.replace("/", "_")
+        preds_file = f"{training_args.output_dir}/validation_preds.txt"
+        with open(preds_file, "w+") as f:
+            f.writelines([pred + "\n" for pred in decoded_preds])
+
         prepare_data_path = f"{root_dir}/DTG-SI/prepare_data_csv.py"
         predict_e2e_content_path = f"{root_dir}/transformers/examples/text-classification/predict_e2e_content.sh"
 
-        test_file_1 = f"{exp_name}.step0.1.csv"
-        test_file_2 = f"{exp_name}.step0.2.csv"
+        subprocess.run(["bash", "python", prepare_data_path, "--input_path", preds_file, "--output_path", training_args.output_dir])
+        subprocess.run(["bash", predict_e2e_content_path, training_args.device, training_args.output_dir, f"{training_args.output_dir}/validation_preds_content.1.csv"])
+        subprocess.run(["bash", predict_e2e_content_path, training_args.device, training_args.output_dir, f"{training_args.output_dir}/validation_preds_content.2.csv"])
 
-        subprocess.run(["bash", "python", prepare_data_path, "--save_path", exp_name, "--step", "0"])
-        subprocess.run(["bash", predict_e2e_content_path, training_args.device, test_file_1])
-        subprocess.run(["bash", predict_e2e_content_path, training_args.device, test_file_2])
+        inc_new = compute_accuracy(f"{training_args.output_dir}/test_results_validation_preds_content.1.csv", 1)
+        exc_old = compute_accuracy(f"{training_args.output_dir}/test_results_validation_preds_content.2.csv", 0)
+        
+        prepare_data_style_path = f"{root_dir}/DTG-SI/prepare_data_style.py"
+        subprocess.run(["bash", "python", prepare_data_style_path, "--preds_path", preds_file, "--output_path", training_args.output_dir])
 
-        inc_new = compute_accuracy(f"{root_dir}/transformers/examples/text-classification/test_data/e2e_generations/{test_file_1}", 1)
-        exc_old = compute_accuracy(f"{root_dir}/transformers/examples/text-classification/test_data/e2e_generations/{test_file_2}", 0)
+        m_bleu = compute_bleu(f"{training_args.output_dir}/mask_y_ref.valid.txt", f"{training_args.output_dir}/mask_validation_preds.txt")
 
-        refs_file = f"{root_dir}/DTG-SI/e2e_data/val/y_ref.valid.txt"
-        with open(refs_file, "r") as f:
-            refs = [ref.strip() for ref in refs_file]
-
-        m_bleu = compute_bleu(refs, decoded_preds)
+        ppl = compute_perplexity(decoded_preds)
 
         metric_dict = {
             "Inc-New": inc_new,
             "Exc-Old": exc_old,
-            "m-BLEU": 
-            "Perplexity": 
+            "m-BLEU": m_bleu,
+            "Perplexity": ppl
         }
+
+        return metric_dict
         
 
 
