@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import nltk  # Here to have a nice missing dependency error message early on
+from nltk import word_tokenize
 import numpy as np
 import random
 from datasets import load_dataset, load_metric
@@ -231,6 +232,8 @@ def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
+
+    root_dir = os.getenv('CTRL_D2T_ROOT')
 
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, Seq2SeqTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -454,18 +457,19 @@ def main():
     def postprocess_text(preds, labels):
         preds = [pred.strip() for pred in preds]
         labels = [[label.strip()] for label in labels]
-
         return preds, labels
 
-
-    def postprocess_preds(preds):
+    def postprocess_totto_preds(preds):
         preds = [pred.strip() for pred in preds]
+        return preds
 
+    def postprocess_e2e_preds(preds):
+        preds = [" ".join(word_tokenize(pred.strip())) for pred in preds]
         return preds
 
 
     def compute_default_metrics(eval_preds):
-        metric = load_metric("sacrebleu")
+        metric = load_metric("bleu")
         preds, labels = eval_preds
         if isinstance(preds, tuple):
             preds = preds[0]
@@ -493,15 +497,14 @@ def main():
             preds = preds[0]
         decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
         # Some simple post-processing
-        decoded_preds = postprocess_preds(decoded_preds)
+        decoded_preds = postprocess_totto_preds(decoded_preds)
 
-        root_dir = os.getenv('CTRL_D2T_ROOT')
         totto_dir = f"{root_dir}/google-language/language/totto/"
         if not os.path.exists("temp"):
             os.mkdir("temp")
-        preds_file_path = f"tmp/totto_preds_{random.randint(0, 1e9)}.txt"
+        preds_file_path = f"temp/totto_preds_{random.randint(0, 1e9)}.txt"
         while os.path.exists(preds_file_path):
-            preds_file_path = f"tmp/totto_preds_{random.randint(0, 1e9)}.txt"
+            preds_file_path = f"temp/totto_preds_{random.randint(0, 1e9)}.txt"
 
         preds_file = open(preds_file_path, "w+")
         preds_file.write('\n'.join(decoded_preds))
@@ -520,6 +523,62 @@ def main():
             metric_dict[metric] = get_parent_metric(metric)
         os.remove(preds_file_path)
         return metric_dict
+
+
+    
+
+    def compute_e2e_metrics(eval_preds):
+        blue_metric = load_metric("bleu")
+        
+        def compute_accuracy(path, correct_label):
+            num_correct = 0
+            with open(path, 'r') as f:
+                data = csv.reader(f, delimiter='\t')
+                data = list(data)
+                for (_, pred) in data[1:]:
+                    if int(pred) == correct_label:
+                        num_correct += 1
+                return num_correct / len(data)
+
+        def compute_bleu(refs, preds):
+            bleu = sacrebleu.compute(predictions=preds, references=refs)
+            print("BLEU: {:.2%}".format(bleu))
+            return bleu
+
+        preds, _ = eval_preds
+        if isinstance(preds, tuple):
+            preds = preds[0]
+        decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+        # Some simple post-processing
+        decoded_preds = postprocess_e2e_preds(decoded_preds)
+
+        exp_name = training_args.output_dir.replace("/", "_")
+        prepare_data_path = f"{root_dir}/DTG-SI/prepare_data_csv.py"
+        predict_e2e_content_path = f"{root_dir}/transformers/examples/text-classification/predict_e2e_content.sh"
+
+        test_file_1 = f"{exp_name}.step0.1.csv"
+        test_file_2 = f"{exp_name}.step0.2.csv"
+
+        subprocess.run(["bash", "python", prepare_data_path, "--save_path", exp_name, "--step", "0"])
+        subprocess.run(["bash", predict_e2e_content_path, training_args.device, test_file_1])
+        subprocess.run(["bash", predict_e2e_content_path, training_args.device, test_file_2])
+
+        inc_new = compute_accuracy(f"{root_dir}/transformers/examples/text-classification/test_data/e2e_generations/{test_file_1}", 1)
+        exc_old = compute_accuracy(f"{root_dir}/transformers/examples/text-classification/test_data/e2e_generations/{test_file_2}", 0)
+
+        refs_file = f"{root_dir}/DTG-SI/e2e_data/val/y_ref.valid.txt"
+        with open(refs_file, "r") as f:
+            refs = [ref.strip() for ref in refs_file]
+
+        m_bleu = compute_bleu(refs, decoded_preds)
+
+        metric_dict = {
+            "Inc-New": inc_new,
+            "Exc-Old": exc_old,
+            "m-BLEU": 
+            "Perplexity": 
+        }
+        
 
 
     def check_dataset(dataset_name):
