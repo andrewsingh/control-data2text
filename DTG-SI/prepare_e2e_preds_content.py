@@ -112,14 +112,11 @@ def prepare_data(input_path, output_path):
     print("Data preparation complete")
 
 
-
-    
 def main(_):
     """ Starts the data preparation
     """
     prepare_data(FLAGS.input_path, FLAGS.output_path)
     
-
 
 if __name__ == "__main__":
   app.run(main)

@@ -52,8 +52,17 @@ from transformers import (
 from transformers.file_utils import is_offline_mode
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
 from transformers.utils import check_min_version
-from sacrebleu import corpus_bleu
 
+
+def use_task_specific_params(model, task):
+    """Update config with summarization specific params."""
+    task_specific_params = model.config.task_specific_params
+
+    if task_specific_params is not None:
+        pars = task_specific_params.get(task, {})
+        logger.info(f"setting model.config to task specific params for {task}:\n {pars}")
+        logger.info("note: command line args may override some of these")
+        model.config.update(pars)
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.6.0.dev0")
@@ -218,6 +227,9 @@ class DataTrainingArguments:
     source_prefix: Optional[str] = field(
         default=None, metadata={"help": "A prefix to add before every source text (useful for T5 models)."}
     )
+    task: Optional[str] = field(
+        default=None, metadata={"help": "Task name for configuration purposes."}
+    )
 
     def __post_init__(self):
         if self.dataset_name is None and self.train_file is None and self.validation_file is None:
@@ -323,6 +335,18 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
+
+    config.task_specific_params["e2e"] = {
+        "prefix": "", 
+        "max_length": data_args.val_max_target_length,
+        "num_beams": data_args.num_beams, 
+    }
+    config.task_specific_params["totto"] = {
+        "prefix": "", 
+        "max_length": data_args.val_max_target_length,
+        "num_beams": data_args.num_beams, 
+    }
+
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
@@ -330,6 +354,7 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
+
     model = AutoModelForSeq2SeqLM.from_pretrained(
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -343,6 +368,23 @@ def main():
         raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
 
     prefix = data_args.source_prefix if data_args.source_prefix is not None else ""
+
+    use_task_specific_params(model, data_args.task)
+
+    print(f"Model config max_length: {model.config.max_length}")
+    print(f"Model config num_beams: {model.config.num_beams}")
+
+    # Add dataset-specific special tokens to tokenizer
+    special_tokens = ["[SEP]"]
+    if data_args.task == "totto":
+        special_tokens += ["<page_title>", "</page_title>", "<section_title>", "</section_title>", "<table>", "</table>", "<cell>", "</cell>", "<row_header>", "</row_header>", "<col_header>", "</col_header>"]
+
+    if len(special_tokens) > 0:
+        special_tokens_dict = {"additional_special_tokens": special_tokens}
+        print("Adding {} special tokens: {}".format(len(special_tokens_dict["additional_special_tokens"]), special_tokens_dict["additional_special_tokens"]))
+        tokenizer.add_special_tokens(special_tokens_dict)
+        model.resize_token_embeddings(len(tokenizer))
+        print("New vocab size: {}".format(model.config.vocab_size))
 
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
@@ -531,11 +573,9 @@ def main():
 
     
     def compute_e2e_metrics(eval_preds):
+        print("Computing E2E evaluation metrics")
         gpu = "0"
         device = f"cuda:{gpu}"
-        print("Computing E2E evaluation metrics")
-        print(f"GPU: {device}")
-
         last_checkpoint = get_last_checkpoint(training_args.output_dir)
         if last_checkpoint:
             output_dir = last_checkpoint
@@ -551,13 +591,6 @@ def main():
                     if int(pred) == correct_label:
                         num_correct += 1
                 return num_correct / len(data)
-
-        def compute_bleu(refs_path, preds_path):
-            with open(refs_path, "r") as f:
-                refs = [line.strip() for line in f]
-            with open(preds_path, "r") as f:
-                preds = [line.strip() for line in f]
-            return round(corpus_bleu(preds, [refs], force=True).score, 4)
 
         def compute_perplexity(preds):
             e2e_lm_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
@@ -593,12 +626,10 @@ def main():
         inc_new = compute_accuracy(f"{output_dir}/test_results_validation_preds_content.1.csv.txt", 1)
         exc_old = compute_accuracy(f"{output_dir}/test_results_validation_preds_content.2.csv.txt", 0)
         
-        print("Preparing data for style evaluation")
-        prepare_preds_style_path = f"{root_dir}/DTG-SI/prepare_e2e_preds_style.py"
-        subprocess.run(["python", prepare_preds_style_path, "--preds_path", preds_file, "--output_path", output_dir])
-
-        print("Running style evaluation")
-        m_bleu = compute_bleu(f"{output_dir}/mask_y_ref.valid.txt", f"{output_dir}/mask_validation_preds.txt")
+        print("Computing m-BLEU")
+        eval_style_path = f"{root_dir}/DTG-SI/evaluate_e2e_style.py"
+        eval_style_results = subprocess.run(["python", eval_style_path, "--preds_path", preds_file], stdout=subprocess.PIPE)
+        m_bleu = float(re.search("BLEU: ([0-9]+.[0-9]+)%", str(eval_style_results.stdout)).group(1))
 
         print("Running language model")
         ppl = compute_perplexity([pred.replace("_", " ") for pred in decoded_preds])
@@ -613,20 +644,9 @@ def main():
         return metric_dict
         
 
-
-    def check_dataset(dataset_name):
-        if data_args.train_file:
-            file_name = data_args.train_file
-        elif data_args.validation_file:
-            file_name = data_args.validation_file
-        else:
-            file_name = data_args.test_file
-        return dataset_name in file_name
-
-
-    if check_dataset("totto"):
+    if data_args.task == "totto":
         metrics_fn = compute_totto_metrics
-    elif check_dataset("e2e"):
+    elif data_args.task == "e2e":
         metrics_fn = compute_e2e_metrics
     else:
         metrics_fn = compute_default_metrics
@@ -668,7 +688,6 @@ def main():
     results = {}
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
-
         metrics = trainer.evaluate(
             max_length=data_args.val_max_target_length, num_beams=data_args.num_beams, metric_key_prefix="eval"
         )

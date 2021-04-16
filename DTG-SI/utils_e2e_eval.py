@@ -4,6 +4,7 @@ Utilities.
 
 import collections
 import os
+import texar as tx
 from data2text.data_utils import extract_entities
 
 
@@ -30,19 +31,22 @@ def replace_data_in_sent(sent, token="<UNK>"):
         sent[data.start] = token
     return sent
         
-def mask_refs_preds(list_of_references, hypotheses):
-    hypotheses = list(map(str.split, hypotheses))
+def corpus_bleu(list_of_references, hypotheses, **kwargs):
     list_of_references = [
         list(map(replace_data_in_sent, refs))
         for refs in list_of_references]
     hypotheses = list(map(replace_data_in_sent, hypotheses))
-    out_refs = [" ".join(ref[0]) for ref in list_of_references]
-    out_hypos = [" ".join(hypo) for hypo in hypotheses]
-    return out_refs, out_hypos
+    return tx.evals.corpus_bleu_moses(
+        list_of_references, hypotheses,
+        lowercase=True, return_all=False,
+        **kwargs)
 
-def read_sents_from_file(file_name):
+def read_refs_from_file(file_name):
     with open(file_name, 'r') as f:
         return list(map(str.split, f))
 
+def read_preds_from_file(file_name):
+    with open(file_name, "r") as f:
+        return list(f)
 
 

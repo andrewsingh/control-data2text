@@ -10,6 +10,7 @@ commands.txt
 DTG-SI/e2e_data/*
 DTG-SI/e2e_dtg_si/*
 DTG-SI/bert/e2e_preparation/*
+DTG-SI/texar/*
 
 google-language/language/totto/temp/*
 
