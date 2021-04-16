@@ -52,6 +52,7 @@ from transformers import (
 from transformers.file_utils import is_offline_mode
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
 from transformers.utils import check_min_version
+from sacremoses import MosesDetokenizer
 
 
 def use_task_specific_params(model, task):
@@ -581,6 +582,17 @@ def main():
             output_dir = last_checkpoint
         else:
             output_dir = training_args.output_dir
+
+        md = MosesDetokenizer(lang='en')
+        e2e_lm_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+        e2e_lm = GPT2LMHeadModel.from_pretrained(f"{root_dir}/transformers/examples/language-modeling/exp/e2e_targets/gpt2-02/checkpoint-9464")
+        e2e_lm.to(device)
+
+        def process_preds_for_lm(preds):
+            processed_preds = []
+            for pred in tqdm(preds):
+                processed_preds.append(md.detokenize(pred.replace("_", " ").split()))
+            return processed_preds
         
         def compute_accuracy(path, correct_label):
             num_correct = 0
@@ -593,9 +605,6 @@ def main():
                 return num_correct / len(data)
 
         def compute_perplexity(preds):
-            e2e_lm_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-            e2e_lm = GPT2LMHeadModel.from_pretrained(f"{root_dir}/transformers/examples/language-modeling/exp/e2e_targets/gpt2-01/checkpoint-7458")
-            e2e_lm.to(device)
             ppls = []
             for pred in tqdm(preds):
                 inputs = e2e_lm_tokenizer(pred, return_tensors='pt').to(device)
@@ -632,7 +641,7 @@ def main():
         m_bleu = float(re.search("BLEU: ([0-9]+.[0-9]+)%", str(eval_style_results.stdout)).group(1))
 
         print("Running language model")
-        ppl = compute_perplexity([pred.replace("_", " ") for pred in decoded_preds])
+        ppl = compute_perplexity(process_preds_for_lm(decoded_preds))
 
         metric_dict = {
             "Inc-New": inc_new,
@@ -640,7 +649,6 @@ def main():
             "m-BLEU": m_bleu,
             "Perplexity": ppl
         }
-
         return metric_dict
         
 

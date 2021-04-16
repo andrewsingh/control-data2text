@@ -16,7 +16,6 @@ python run_data_to_text.py \
     --val_max_target_length 64 \
     --save_total_limit 8 \
     --logging_steps 1000 \
-    --load_best_model_at_end \
     --evaluation_strategy "epoch" \
     --predict_with_generate \
     --max_val_samples 64 \
