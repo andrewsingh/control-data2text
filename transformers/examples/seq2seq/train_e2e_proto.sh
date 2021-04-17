@@ -1,9 +1,9 @@
 export CUDA_VISIBLE_DEVICES=$1
 
 python run_data_to_text.py \
-    --model_name_or_path "t5-small" \
+    --model_name_or_path "exp/e2e/e2e_k10_t5_small_01/checkpoint-3000" \
     --task "e2e" \
-    --output_dir "$CTRL_D2T_ROOT/transformers/examples/seq2seq/exp/e2e/e2e_k10_t5_small_01" \
+    --output_dir "exp/e2e/e2e_k10_t5_small_01" --overwrite_output_dir \
     --train_file "test_data/e2e_k10/train.json" \
     --validation_file "test_data/e2e_k10/validation.json" \
     --learning_rate 1e-4 \
@@ -17,7 +17,9 @@ python run_data_to_text.py \
     --save_total_limit 8 \
     --logging_steps 1000 \
     --evaluation_strategy "steps" \
-    --eval_steps 3000
+    --eval_steps 3000 \
+    --save_strategy "steps" \
+    --save_steps 3000 \
     --predict_with_generate \
     --num_beams 5 \
     --do_train --do_eval

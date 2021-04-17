@@ -17,6 +17,6 @@ python run_data_to_text.py \
     --save_total_limit 8 \
     --logging_steps 1000 \
     --evaluation_strategy "epoch" \
+    --save_strategy "epoch" \
     --predict_with_generate \
-    --max_val_samples 64 \
     --do_eval

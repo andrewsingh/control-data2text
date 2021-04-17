@@ -3,7 +3,7 @@ export CUDA_VISIBLE_DEVICES=$1
 python run_data_to_text.py \
     --model_name_or_path "t5-small" \
     --task "e2e" \
-    --output_dir "$CTRL_D2T_ROOT/transformers/examples/seq2seq/exp/e2e/e2e_t5_small_01" \
+    --output_dir "exp/e2e/e2e_t5_small_01_test" \
     --train_file "test_data/e2e/train.json" \
     --validation_file "test_data/e2e/validation.json" \
     --learning_rate 1e-4 \
@@ -18,6 +18,8 @@ python run_data_to_text.py \
     --logging_steps 1000 \
     --evaluation_strategy "steps" \
     --eval_steps 2000 \
+    --save_strategy "steps" \
+    --save_steps 2000 \
     --predict_with_generate \
     --num_beams 5 \
     --do_train --do_eval

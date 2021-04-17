@@ -50,9 +50,10 @@ from transformers import (
     GPT2LMHeadModel
 )
 from transformers.file_utils import is_offline_mode
-from transformers.trainer_utils import get_last_checkpoint, is_main_process
+from transformers.trainer_utils import get_last_checkpoint, is_main_process, PREFIX_CHECKPOINT_DIR
 from transformers.utils import check_min_version
 from sacremoses import MosesDetokenizer
+from dtg_si_trainer import DtgSiTrainer
 
 
 def use_task_specific_params(model, task):
@@ -231,6 +232,9 @@ class DataTrainingArguments:
     task: Optional[str] = field(
         default=None, metadata={"help": "Task name for configuration purposes."}
     )
+    loss_lambda: Optional[float] = field(
+        default=None, metadata={"help": "Balancing weight for DTG-SI joint training objective."}
+    )
 
     def __post_init__(self):
         if self.dataset_name is None and self.train_file is None and self.validation_file is None:
@@ -337,16 +341,14 @@ def main():
         use_auth_token=True if model_args.use_auth_token else None,
     )
 
-    config.task_specific_params["e2e"] = {
+    default_params = {
         "prefix": "", 
         "max_length": data_args.val_max_target_length,
         "num_beams": data_args.num_beams, 
     }
-    config.task_specific_params["totto"] = {
-        "prefix": "", 
-        "max_length": data_args.val_max_target_length,
-        "num_beams": data_args.num_beams, 
-    }
+    config.task_specific_params["e2e"] = default_params
+    config.task_specific_params["e2e_dtg_si"] = default_params
+    config.task_specific_params["totto"] = default_params
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
@@ -577,11 +579,19 @@ def main():
         print("Computing E2E evaluation metrics")
         gpu = "0"
         device = f"cuda:{gpu}"
-        last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        if last_checkpoint:
-            output_dir = last_checkpoint
-        else:
+        if trainer.state.global_step == 0:
             output_dir = training_args.output_dir
+        else:
+            output_dir = os.path.join(training_args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{trainer.state.global_step}")
+        output_dir = os.path.realpath(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        print(f"Saving results to directory: {output_dir}")
+        
+        # last_checkpoint = get_last_checkpoint(training_args.output_dir)
+        # if last_checkpoint:
+        #     output_dir = last_checkpoint
+        # else:
+        #     output_dir = training_args.output_dir
 
         md = MosesDetokenizer(lang='en')
         e2e_lm_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
@@ -632,8 +642,14 @@ def main():
         subprocess.run(["bash", predict_e2e_content_path, gpu, output_dir, f"{output_dir}/validation_preds_content.1.csv"])
         subprocess.run(["bash", predict_e2e_content_path, gpu, output_dir, f"{output_dir}/validation_preds_content.2.csv"])
 
-        inc_new = compute_accuracy(f"{output_dir}/test_results_validation_preds_content.1.csv.txt", 1)
-        exc_old = compute_accuracy(f"{output_dir}/test_results_validation_preds_content.2.csv.txt", 0)
+        content_results_1 = f"{output_dir}/test_results_validation_preds_content.1.csv.txt"
+        content_results_2 = f"{output_dir}/test_results_validation_preds_content.2.csv.txt"
+
+        inc_new = compute_accuracy(content_results_1, 1)
+        exc_old = compute_accuracy(content_results_2, 0)
+
+        os.remove(content_results_1)
+        os.remove(content_results_2)
         
         print("Computing m-BLEU")
         eval_style_path = f"{root_dir}/DTG-SI/evaluate_e2e_style.py"
@@ -661,15 +677,30 @@ def main():
     
 
     # Initialize our Trainer
-    trainer = Seq2SeqTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset if training_args.do_train else None,
-        eval_dataset=eval_dataset if training_args.do_eval else None,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-        compute_metrics=metrics_fn if training_args.predict_with_generate else None,
-    )
+    if data_args.task == "e2e_dtg_si":
+        training_args.loss_lambda = data_args.loss_lambda
+        training_args.max_source_length = data_args.max_source_length
+        training_args.max_target_length = data_args.max_target_length
+        training_args.per_device_train_batch_size = 1
+        trainer = DtgSiTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset if training_args.do_train else None,
+            eval_dataset=eval_dataset if training_args.do_eval else None,
+            tokenizer=tokenizer,
+            data_collator=data_collator,
+            compute_metrics=metrics_fn if training_args.predict_with_generate else None,
+        )
+    else:
+        trainer = Seq2SeqTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset if training_args.do_train else None,
+            eval_dataset=eval_dataset if training_args.do_eval else None,
+            tokenizer=tokenizer,
+            data_collator=data_collator,
+            compute_metrics=metrics_fn if training_args.predict_with_generate else None,
+        )
 
     # Training
     if training_args.do_train:
