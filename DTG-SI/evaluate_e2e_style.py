@@ -22,8 +22,8 @@ def compute_m_bleu(ref_file, pred_file):
     refs = read_refs_from_file(ref_file)
     refs = [[ref] for ref in refs]
     preds = [" ".join(word_tokenize(pred)) for pred in read_preds_from_file(pred_file)]
-    bleu = corpus_bleu(refs, list(map(str.split, preds))) * 1e-2
-    print("BLEU: {:.2%}".format(bleu))
+    bleu = corpus_bleu(refs, list(map(str.split, preds)))
+    print(f"BLEU: {float(bleu)}")
 
 
 def main(_):

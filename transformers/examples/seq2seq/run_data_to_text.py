@@ -654,10 +654,13 @@ def main():
         print("Computing m-BLEU")
         eval_style_path = f"{root_dir}/DTG-SI/evaluate_e2e_style.py"
         eval_style_results = subprocess.run(["python", eval_style_path, "--preds_path", preds_file], stdout=subprocess.PIPE)
-        m_bleu = float(re.search("BLEU: ([0-9]+.[0-9]+)%", str(eval_style_results.stdout)).group(1))
+        m_bleu = float(re.search("BLEU: ([0-9]+.[0-9]+)", str(eval_style_results.stdout)).group(1))
 
         print("Running language model")
-        ppl = compute_perplexity(process_preds_for_lm(decoded_preds))
+        try:
+            ppl = compute_perplexity(process_preds_for_lm(decoded_preds))
+        except:
+            ppl = -1
 
         metric_dict = {
             "Inc-New": inc_new,
@@ -670,7 +673,7 @@ def main():
 
     if data_args.task == "totto":
         metrics_fn = compute_totto_metrics
-    elif data_args.task == "e2e":
+    elif data_args.task in ["e2e", "e2e_dtg_si"]:
         metrics_fn = compute_e2e_metrics
     else:
         metrics_fn = compute_default_metrics

@@ -7,7 +7,7 @@ python run_data_to_text.py \
     --train_file "test_data/e2e/train.json" \
     --validation_file "test_data/e2e/validation.json" \
     --learning_rate 1e-4 \
-    --per_device_train_batch_size 32 \
+    --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 1 \
     --per_device_eval_batch_size 32 \
     --num_train_epochs 15 \

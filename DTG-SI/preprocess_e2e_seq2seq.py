@@ -10,7 +10,8 @@ flags.DEFINE_string("output_dir", f"{os.getenv('CTRL_D2T_ROOT')}/transformers/ex
 flags.DEFINE_string("split", None, "Dataset split: 'train', 'validation', or 'test'")
 flags.DEFINE_bool("include_refs", False, "Whether to include style references in source (for controlled generation)")
 flags.DEFINE_bool("preprocess_split", False, "Run ordinary preprocessing method")
-flags.DEFINE_bool("preprocess_dtg_si_train", False, "Run DTG-SI pre-trained comparison preprocessing method")
+flags.DEFINE_bool("preprocess_dtg_si_joint", False, "Run DTG-SI pre-trained comparison preprocessing method")
+flags.DEFINE_bool("preprocess_dtg_si_retrieval", False, "Run DTG-SI retrieval comparison preprocessing method")
 
 
 FLAGS = flags.FLAGS
@@ -62,7 +63,7 @@ def preprocess_split(input_dir, split, include_refs=False):
     return preprocessed_examples
 
 
-def preprocess_dtg_si_train(input_dir):
+def preprocess_dtg_si_joint(input_dir):
     train_dir = os.path.join(input_dir, "train")
     x_type_lines = read_from_file(f"{train_dir}/x_type.train.txt")
     x_value_lines = read_from_file(f"{train_dir}/x_value.train.txt")
@@ -86,15 +87,36 @@ def preprocess_dtg_si_train(input_dir):
     return preprocessed_examples
 
 
+def preprocess_dtg_si_retrieval(input_dir):
+    train_dir = os.path.join(input_dir, "train")
+    x_type_lines = read_from_file(f"{train_dir}/x_type.train.txt")
+    x_value_lines = read_from_file(f"{train_dir}/x_value.train.txt")
+    y_aux_lines = read_from_file(f"{train_dir}/y_aux.train.txt")
+    y_ref_lines = read_from_file(f"{train_dir}/y_ref.train.txt")
+    
+    preprocessed_examples = []
+    for i in range(len(x_type_lines)):
+        x_src_str = get_src_str(x_type_lines[i], x_value_lines[i])
+        preprocessed_example = {}
+        preprocessed_example["source"] = y_ref_lines[i] + " [SEP] " + x_src_str
+        preprocessed_example["target"] = y_aux_lines[i]
+        preprocessed_examples.append(preprocessed_example)
+
+    return preprocessed_examples
+
+
 
 def main(_):
     output_dir = FLAGS.output_dir
     if FLAGS.preprocess_split:
         split = FLAGS.split
         preprocessed_examples = preprocess_split(FLAGS.input_dir, split, include_refs=FLAGS.include_refs)
-    elif FLAGS.preprocess_dtg_si_train:
+    elif FLAGS.preprocess_dtg_si_joint:
         split = "train"
-        preprocessed_examples = preprocess_dtg_si_train(FLAGS.input_dir)
+        preprocessed_examples = preprocess_dtg_si_joint(FLAGS.input_dir)
+    elif FLAGS.preprocess_dtg_si_retrieval:
+        split = "train"
+        preprocessed_examples = preprocess_dtg_si_retrieval(FLAGS.input_dir)
     
     os.makedirs(output_dir, exist_ok=True)
     output_file = Path(output_dir).joinpath(split + ".json")
