@@ -7,45 +7,46 @@ import json
 from pathlib import Path
 from tqdm import tqdm
 from collections import defaultdict
+from sentence_transformers import SentenceTransformer
 
 
 class Retriever():
 
-    mask_str = "[MASK]"
+    MASK_STR = "[MASK]"
     
-    def __init__(self, split, index_path, data_dir, proto_data_dir):
-        self.split = split
-        self.src_file = Path(data_dir).joinpath(split + ".source")
-        self.tgt_file = Path(data_dir).joinpath(split + ".target")
-        self.index_path = index_path
-        self.proto_data_dir = proto_data_dir
+    def __init__(self, dataset_path):
+        self.dataset_path = dataset_path
+        self.gpu = gpu
         
 
     def mask_target(self, source, target):
         pass
 
 
-    def mask_dataset(self, num_proc=1):
-        data_sep = datasets.load_dataset("text", data_files={"train": self.src_file, "test": self.tgt_file})
-        data_dict = {"source": data_sep["train"]["text"], "target": data_sep["test"]["text"]}
-        data = datasets.Dataset.from_dict(data_dict)
+    def create_dataset(self, data_json):
+        dataset = datasets.load_dataset("json", data_files=data_json)["train"]
+        dataset.save_to_disk(self.dataset_path)
 
-        def mask_and_split(example):
+
+    def add_masks(self, num_proc=1):
+        dataset = datasets.load_from_disk(self.dataset_path)
+
+        def add_mask(example):
             masked_target = self.mask_target(example["source"], example["target"])
             split_masked_target = masked_target.split()
             return {"masked_target": masked_target, "split_masked_target": split_masked_target}
 
-        masked_data = data.map(mask_and_split, num_proc=num_proc)
-        masked_data.save_to_disk(self.index_path)
+        masked_data = dataset.map(add_mask, num_proc=num_proc)
+        masked_data.save_to_disk(self.dataset_path)
 
 
-    def add_edit_dist_maps(self, edit_dist_thresh=50, edit_dist_index_size=50):
-        data = datasets.load_from_disk(self.index_path)
+    def add_edit_dist_maps(self, edit_dist_thresh=50, edit_dist_index_size=50, num_proc=1):
+        dataset = datasets.load_from_disk(self.dataset_path)
         
-        def add_edit_dist_map(example, num_proc=1):
+        def add_edit_dist_map(example):
             dist_map = defaultdict(lambda: [])
             a = example["split_masked_target"]
-            for i, b in enumerate(data["split_masked_target"]):
+            for i, b in enumerate(dataset["split_masked_target"]):
                 edit_dist = editdistance.eval(a, b)
                 dist_map[edit_dist].append(i)
             dist_map.pop(0, None)
@@ -62,14 +63,14 @@ class Retriever():
             for dist, indices in dist_list:
                 if dist <= edit_dist_index_size:
                     edit_dist_map[dist] = indices
-            return {"{}_edit_dist_map".format(compare_split): edit_dist_map}
+            return {"edit_dist_map": edit_dist_map}
 
-        data = data.map(add_edit_dist_maps, num_proc=num_proc)
-        data.save_to_disk(self.index_path)
+        dataset = dataset.map(add_edit_dist_map, num_proc=num_proc)
+        dataset.save_to_disk(self.dataset_path)
 
 
-    def add_embed_index(self, feature, sentence_encoder_name="stsb-distilbert-base", gpu=None):
-        data = datasets.load_from_disk(self.index_path)
+    def add_embeds(self, feature, sentence_encoder_name="stsb-distilbert-base", gpu=None):
+        dataset = datasets.load_from_disk(self.dataset_path)
         sentence_encoder = SentenceTransformer(sentence_encoder_name)
         if gpu:
             sentence_encoder.to("cuda:{}".format(gpu))
@@ -78,28 +79,28 @@ class Retriever():
             feature_embed = sentence_encoder.encode(example[feature])
             return {"{}_embed".format(feature): feature_embed}
 
-        data = data.map(add_embed)
-        data.save_to_disk(self.index_path)
+        dataset = dataset.map(add_embed)
+        dataset.save_to_disk(self.dataset_path)
 
 
-    def create_train_set(self, retrieval_k=5, max_edit_dist=None, seed=42):
+    def create_train_set(self, out_dir, retrieval_k=5, max_edit_dist=None, seed=42):
         random.seed(seed)
         lines = []
         new_target_lines = []
         examples = []
-        data = datasets.load_from_disk(self.index_path)
+        dataset = datasets.load_from_disk(self.dataset_path)
 
-        if "edit_dist_map" not in data[0]:
+        if "edit_dist_map" not in dataset[0]:
             print("Edit distance maps not in index, adding them now...")
             self.add_edit_dist_maps()
-            data = datasets.load_from_disk(self.index_path)
+            dataset = datasets.load_from_disk(self.dataset_path)
 
         if not max_edit_dist:
-            max_edit_dist = len(data[0]["edit_dist_map"])
+            max_edit_dist = len(dataset[0]["edit_dist_map"])
         
-        for i in tqdm(range(len(data))):
+        for i in tqdm(range(len(dataset))):
             chosen_indices = []
-            for (edit_dist, indices) in list(enumerate(data[i]["edit_dist_map"]))[:max_edit_dist + 1]:
+            for (edit_dist, indices) in list(enumerate(dataset[i]["edit_dist_map"]))[:max_edit_dist + 1]:
                 if indices:
                     remaining_indices = retrieval_k - len(chosen_indices)
                     if len(indices) <= remaining_indices:
@@ -110,19 +111,20 @@ class Retriever():
             
             for proto_idx in chosen_indices:
                 example = {}
-                example["source"] = (data[proto_idx]["target"] + " [SEP] " + data[i]["source"]).strip()
-                example["target"] = data[i]["target"].strip()
+                example["source"] = (dataset[proto_idx]["target"] + " [SEP] " + dataset[i]["source"]).strip()
+                example["target"] = dataset[i]["target"].strip()
                 examples.append(example)
 
-        if not os.path.exists(self.proto_data_dir):
-            os.mkdir(self.proto_data_dir)
+        os.makedirs(out_dir, exist_ok=True)
 
-        with open(f"{self.proto_data_dir}/{self.split}.json", "w+") as f:
+        save_path = f"{out_dir}/train.json"
+        with open(save_path, "w+") as f:
             for example in examples:
                 f.write(json.dumps(example) + "\n")
+            print(f"Wrote training data to file: {save_path}")
 
 
-    def create_eval_set(self, eval_k):
+    def create_eval_set(self, out_dir, eval_k):
         pass
 
 

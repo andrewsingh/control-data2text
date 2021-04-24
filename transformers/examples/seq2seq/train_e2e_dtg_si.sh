@@ -1,10 +1,10 @@
 export CUDA_VISIBLE_DEVICES=$1
 
 python run_data_to_text.py \
-    --model_name_or_path "exp/e2e/e2e_dtg_si_t5_small_lambda_0.01/checkpoint-3000" \
+    --model_name_or_path "exp/e2e/e2e_dtg_si_t5_small_lambda_0.05/checkpoint-1500" \
     --task "e2e_dtg_si" \
-    --loss_lambda 0.01 \
-    --output_dir "exp/e2e/e2e_dtg_si_t5_small_lambda_0.01" --overwrite_output_dir \
+    --loss_lambda 0.05 \
+    --output_dir "exp/e2e/e2e_dtg_si_t5_small_lambda_0.05" --overwrite_output_dir \
     --train_file "test_data/e2e_dtg_si/train.json" \
     --validation_file "test_data/e2e_dtg_si/validation.json" \
     --learning_rate 1e-4 \

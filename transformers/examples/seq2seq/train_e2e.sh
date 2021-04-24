@@ -22,4 +22,4 @@ python run_data_to_text.py \
     --save_steps 2000 \
     --predict_with_generate \
     --num_beams 5 \
-    --do_train --do_eval
+    --do_eval

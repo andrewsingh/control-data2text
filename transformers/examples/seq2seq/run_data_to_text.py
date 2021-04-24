@@ -549,17 +549,17 @@ def main():
         # Some simple post-processing
         decoded_preds = postprocess_totto_preds(decoded_preds)
 
-        totto_dir = f"{root_dir}/google-language/language/totto/"
-        if not os.path.exists("temp"):
-            os.mkdir("temp")
-        preds_file_path = f"temp/totto_preds_{random.randint(0, 1e9)}.txt"
+        totto_dir = f"{root_dir}/google-language/language/totto"
+        temp_dir = totto_dir + "/temp"
+        os.makedirs(temp_dir, exist_ok=True)
+        preds_file_path = os.path.join(temp_dir, f"totto_preds_{random.randint(0, 1e9)}.txt") 
         while os.path.exists(preds_file_path):
-            preds_file_path = f"temp/totto_preds_{random.randint(0, 1e9)}.txt"
+            preds_file_path = os.path.join(temp_dir, f"totto_preds_{random.randint(0, 1e9)}.txt") 
 
         preds_file = open(preds_file_path, "w+")
         preds_file.write('\n'.join(decoded_preds))
         preds_file.close()
-        results = subprocess.run(["bash", totto_dir + "totto_eval.sh", "--prediction_path", preds_file_path, "--target_path", totto_dir + "totto_data/totto_dev_data.jsonl", "--output_dir", totto_dir + "temp/"], stdout=subprocess.PIPE)
+        results = subprocess.run(["bash", totto_dir + "/totto_eval.sh", "--prediction_path", preds_file_path, "--target_path", totto_dir + "/totto_data/totto_dev_data.jsonl", "--output_dir", temp_dir], stdout=subprocess.PIPE)
 
         def get_bleu():
             return float(re.search("BLEU\+case\.mixed\+numrefs\.3\+smooth\.exp\+tok\.13a\+version\.1\.5\.1 = ([0-9]+.[0-9]+)", str(results.stdout)).group(1))

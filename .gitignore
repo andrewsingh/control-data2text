@@ -17,4 +17,5 @@ google-language/language/totto/temp/*
 transformers/examples/*/test_data/*
 transformers/examples/*/exp/*
 
-prototype-retrieval/indexes/*
+prototype-retrieval/datasets/*
+

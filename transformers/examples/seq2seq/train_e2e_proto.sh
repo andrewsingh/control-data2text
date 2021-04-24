@@ -1,11 +1,11 @@
 export CUDA_VISIBLE_DEVICES=$1
 
 python run_data_to_text.py \
-    --model_name_or_path "t5-small" \
+    --model_name_or_path "facebook/bart-base" \
     --task "e2e" \
-    --output_dir "exp/e2e/e2e_dtg_si_retrieval_t5_small" \
-    --train_file "test_data/e2e_dtg_si_retrieval/train.json" \
-    --validation_file "test_data/e2e_dtg_si_retrieval/validation.json" \
+    --output_dir "exp/e2e/e2e_k3_bart_base" \
+    --train_file "test_data/e2e_k3/train.json" \
+    --validation_file "test_data/e2e_k3/validation.json" \
     --learning_rate 1e-4 \
     --per_device_train_batch_size 32 \
     --gradient_accumulation_steps 1 \
