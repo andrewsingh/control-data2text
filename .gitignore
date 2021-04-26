@@ -13,6 +13,7 @@ DTG-SI/bert/e2e_preparation/*
 DTG-SI/texar/*
 
 google-language/language/totto/temp/*
+google-language/language.egg-info/*
 
 transformers/examples/*/test_data/*
 transformers/examples/*/exp/*

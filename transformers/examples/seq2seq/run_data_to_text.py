@@ -25,6 +25,8 @@ import subprocess
 import re
 import csv
 import math
+import random
+import shutil
 from dataclasses import dataclass, field
 from typing import Optional
 from tqdm import tqdm
@@ -32,7 +34,9 @@ from tqdm import tqdm
 import nltk  # Here to have a nice missing dependency error message early on
 from nltk import word_tokenize
 import numpy as np
-import random
+import texar as tx
+import spacy
+from spacy.symbols import ORTH
 from datasets import load_dataset, load_metric
 
 import transformers
@@ -54,6 +58,14 @@ from transformers.trainer_utils import get_last_checkpoint, is_main_process, PRE
 from transformers.utils import check_min_version
 from sacremoses import MosesDetokenizer
 from dtg_si_trainer import DtgSiTrainer
+
+ROOT_DIR = os.getenv('CTRL_D2T_ROOT')
+sys.path.append(f"{ROOT_DIR}/prototype-retrieval/retrievers")
+
+from totto_retriever import TottoRetriever
+
+E2E_LM_CHECKPOINT = f"{ROOT_DIR}/transformers/examples/language-modeling/exp/e2e_targets/gpt2-02/checkpoint-9464"
+TOTTO_LM_CHECKPOINT = f"{ROOT_DIR}/transformers/examples/language-modeling/exp/totto_targets/gpt2/checkpoint-20264"
 
 
 def use_task_specific_params(model, task):
@@ -256,8 +268,6 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    root_dir = os.getenv('CTRL_D2T_ROOT')
-
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, Seq2SeqTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
@@ -379,7 +389,7 @@ def main():
 
     # Add dataset-specific special tokens to tokenizer
     special_tokens = ["[SEP]"]
-    if data_args.task == "totto":
+    if "totto" in data_args.task:
         special_tokens += ["<page_title>", "</page_title>", "<section_title>", "</section_title>", "<table>", "</table>", "<cell>", "</cell>", "<row_header>", "</row_header>", "<col_header>", "</col_header>"]
 
     if len(special_tokens) > 0:
@@ -511,11 +521,43 @@ def main():
         return preds, labels
 
     def postprocess_totto_preds(preds):
-        return [pred.strip() for pred in preds]
+        normal_preds = [pred.strip() for pred in preds]
+        if data_args.task == "totto":
+            return normal_preds, None, None
+        else:
+            mask_token = "<UNK>"
+            masked_preds = []
+            masked_protos = []
+            print("Masking predictions and prototypes for style eval")
+            for i in tqdm(range(len(normal_preds))):
+                proto, source = datasets["validation"][i]["source"].split("[SEP]")
+                proto = proto.strip()
+                source = source.strip()
+                masked_preds.append(TottoRetriever.mask_target(source, normal_preds[i], mask_token=mask_token).strip())
+                masked_protos.append(TottoRetriever.mask_target(source, proto, mask_token=mask_token).strip())
+
+            print(f"\nPostprocess sample:\nNormal pred: {normal_preds[0]}\nMasked pred: {masked_preds[0]}\nMasked proto: {masked_protos[0]}")
+            return normal_preds, masked_preds, masked_protos
 
     def postprocess_e2e_preds(preds):
         print("Post-processing E2E predictions")
         return [" ".join(word_tokenize(pred.strip())) for pred in preds]
+
+    def compute_perplexity(preds, tokenizer, language_model, device):
+        ppls = []
+        for pred in tqdm(preds):
+            inputs = tokenizer(pred, return_tensors='pt').to(device)
+            outputs = language_model(**inputs, labels=inputs['input_ids'])
+            ppls.append(math.exp(outputs.loss))
+        return round((sum(ppls) / len(ppls)), 4)
+
+    def get_output_dir():
+        if trainer.model.training:
+            output_dir = f"{os.path.realpath(training_args.output_dir)}/validation_results/{PREFIX_CHECKPOINT_DIR}-{trainer.state.global_step}"
+        else:
+            output_dir = f"{os.path.realpath(training_args.output_dir)}/eval_results/{os.path.splitext(os.path.basename(data_args.validation_file))[0]}"
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
 
 
     def compute_default_metrics(eval_preds):
@@ -542,36 +584,57 @@ def main():
 
 
     def compute_totto_metrics(eval_preds):
-        preds, _ = eval_preds
+        gpu = "0"
+        device = f"cuda:{gpu}"
+        output_dir = get_output_dir()
+        print(f"Saving results to directory: {output_dir}")
+        preds, labels = eval_preds
         if isinstance(preds, tuple):
             preds = preds[0]
         decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-        # Some simple post-processing
-        decoded_preds = postprocess_totto_preds(decoded_preds)
+        normal_preds, masked_preds, masked_protos = postprocess_totto_preds(decoded_preds)
 
-        totto_dir = f"{root_dir}/google-language/language/totto"
-        temp_dir = totto_dir + "/temp"
+        if masked_preds:
+            print("Computing m-BLEU")
+            bleu_refs = [[ref] for ref in masked_protos]
+            bleu_preds = list(map(str.split, masked_preds))
+            m_bleu = tx.evals.corpus_bleu_moses(bleu_refs, bleu_preds, lowercase=True, return_all=False)
+            print(f"m_bleu: {m_bleu}")
+        else:
+            m_bleu = -1
+
+        print("Computing PARENT metrics")
+        totto_dir = f"{ROOT_DIR}/google-language/language/totto"
+        temp_dir = f"{totto_dir}/temp"
         os.makedirs(temp_dir, exist_ok=True)
-        preds_file_path = os.path.join(temp_dir, f"totto_preds_{random.randint(0, 1e9)}.txt") 
-        while os.path.exists(preds_file_path):
-            preds_file_path = os.path.join(temp_dir, f"totto_preds_{random.randint(0, 1e9)}.txt") 
+        parent_preds_file = f"{temp_dir}/totto_preds_{random.randint(0, 1e9)}.txt"
+        while os.path.exists(parent_preds_file):
+            parent_preds_file = f"{temp_dir}/totto_preds_{random.randint(0, 1e9)}.txt"
+        with open(parent_preds_file, "w+") as f:
+            f.write('\n'.join(normal_preds))
+      
+        results = subprocess.run(["bash", totto_dir + "/totto_eval.sh", "--prediction_path", parent_preds_file, "--target_path", totto_dir + "/totto_data/totto_dev_data.jsonl", "--output_dir", temp_dir], stdout=subprocess.PIPE)
+        shutil.copyfile(parent_preds_file, f"{output_dir}/validation_preds.txt")
+        os.remove(parent_preds_file)
 
-        preds_file = open(preds_file_path, "w+")
-        preds_file.write('\n'.join(decoded_preds))
-        preds_file.close()
-        results = subprocess.run(["bash", totto_dir + "/totto_eval.sh", "--prediction_path", preds_file_path, "--target_path", totto_dir + "/totto_data/totto_dev_data.jsonl", "--output_dir", temp_dir], stdout=subprocess.PIPE)
+        print("Computing perplexity")
+        totto_lm_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+        totto_lm = GPT2LMHeadModel.from_pretrained(TOTTO_LM_CHECKPOINT)
+        totto_lm.to(device)
+        try:
+            ppl = compute_perplexity(normal_preds, totto_lm_tokenizer, totto_lm, device)
+        except:
+            ppl = -1
 
-        def get_bleu():
-            return float(re.search("BLEU\+case\.mixed\+numrefs\.3\+smooth\.exp\+tok\.13a\+version\.1\.5\.1 = ([0-9]+.[0-9]+)", str(results.stdout)).group(1))
-            
         def get_parent_metric(metric):
             return float(re.search("{} = ([0-9]+.[0-9]+)".format(metric), str(results.stdout)).group(1))
 
         parent_metrics = ["Precision", "Recall", "F-score"]
-        metric_dict = {"BLEU": get_bleu()}
+        metric_dict = {}
         for metric in parent_metrics:
             metric_dict[metric] = get_parent_metric(metric)
-        os.remove(preds_file_path)
+        metric_dict["Perplexity"] = ppl
+        metric_dict["m-BLEU"] = m_bleu
         return metric_dict
 
     
@@ -579,25 +642,10 @@ def main():
         print("Computing E2E evaluation metrics")
         gpu = "0"
         device = f"cuda:{gpu}"
-        if trainer.state.global_step == 0:
-            output_dir = training_args.output_dir
-        else:
-            output_dir = os.path.join(training_args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{trainer.state.global_step}")
-        output_dir = os.path.realpath(output_dir)
-        os.makedirs(output_dir, exist_ok=True)
+        output_dir = get_output_dir()
         print(f"Saving results to directory: {output_dir}")
-        
-        # last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        # if last_checkpoint:
-        #     output_dir = last_checkpoint
-        # else:
-        #     output_dir = training_args.output_dir
-
         md = MosesDetokenizer(lang='en')
-        e2e_lm_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-        e2e_lm = GPT2LMHeadModel.from_pretrained(f"{root_dir}/transformers/examples/language-modeling/exp/e2e_targets/gpt2-02/checkpoint-9464")
-        e2e_lm.to(device)
-
+        
         def process_preds_for_lm(preds):
             processed_preds = []
             for pred in tqdm(preds):
@@ -614,26 +662,18 @@ def main():
                         num_correct += 1
                 return num_correct / len(data)
 
-        def compute_perplexity(preds):
-            ppls = []
-            for pred in tqdm(preds):
-                inputs = e2e_lm_tokenizer(pred, return_tensors='pt').to(device)
-                outputs = e2e_lm(**inputs, labels=inputs['input_ids'])
-                ppls.append(math.exp(outputs.loss))
-            return round((sum(ppls) / len(ppls)), 4)
-
         preds, _ = eval_preds
         if isinstance(preds, tuple):
             preds = preds[0]
         decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-        decoded_preds = postprocess_e2e_preds(decoded_preds)
+        normal_preds = postprocess_e2e_preds(decoded_preds)
 
         preds_file = f"{output_dir}/validation_preds.txt"
         with open(preds_file, "w+") as f:
-            f.writelines([pred + "\n" for pred in decoded_preds])
+            f.writelines([pred + "\n" for pred in normal_preds])
 
-        prepare_preds_content_path = f"{root_dir}/DTG-SI/prepare_e2e_preds_content.py"
-        predict_e2e_content_path = f"{root_dir}/transformers/examples/text-classification/predict_e2e_content.sh"
+        prepare_preds_content_path = f"{ROOT_DIR}/DTG-SI/prepare_e2e_preds_content.py"
+        predict_e2e_content_path = f"{ROOT_DIR}/transformers/examples/text-classification/predict_e2e_content.sh"
 
         print("Preparing predictions for content classifier")
         subprocess.run(["python", prepare_preds_content_path, "--input_path", preds_file, "--output_path", output_dir])
@@ -652,13 +692,16 @@ def main():
         os.remove(content_results_2)
         
         print("Computing m-BLEU")
-        eval_style_path = f"{root_dir}/DTG-SI/evaluate_e2e_style.py"
+        eval_style_path = f"{ROOT_DIR}/DTG-SI/evaluate_e2e_style.py"
         eval_style_results = subprocess.run(["python", eval_style_path, "--preds_path", preds_file], stdout=subprocess.PIPE)
         m_bleu = float(re.search("BLEU: ([0-9]+.[0-9]+)", str(eval_style_results.stdout)).group(1))
 
         print("Running language model")
+        e2e_lm_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+        e2e_lm = GPT2LMHeadModel.from_pretrained(E2E_LM_CHECKPOINT)
+        e2e_lm.to(device)
         try:
-            ppl = compute_perplexity(process_preds_for_lm(decoded_preds))
+            ppl = compute_perplexity(process_preds_for_lm(normal_preds), e2e_lm_tokenizer, e2e_lm, device)
         except:
             ppl = -1
 
@@ -671,9 +714,9 @@ def main():
         return metric_dict
         
 
-    if data_args.task == "totto":
+    if "totto" in data_args.task:
         metrics_fn = compute_totto_metrics
-    elif data_args.task in ["e2e", "e2e_dtg_si"]:
+    elif "e2e" in data_args.task:
         metrics_fn = compute_e2e_metrics
     else:
         metrics_fn = compute_default_metrics

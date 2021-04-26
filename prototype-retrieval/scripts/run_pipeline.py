@@ -31,6 +31,7 @@ def get_args():
 
 
 def main():
+    # TODO: this code no longer works with revised Retriever classes
     args = get_args()
     
     if args.dataset == "e2e":

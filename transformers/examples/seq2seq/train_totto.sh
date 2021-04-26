@@ -1,7 +1,7 @@
 export CUDA_VISIBLE_DEVICES=$1
 
 python run_data_to_text.py \
-    --model_name_or_path "facebook/bart-base" \
+    --model_name_or_path "t5-small" \
     --task "totto" \
     --output_dir "exp/totto/totto_bart_base" \
     --train_file "test_data/totto/train.json" \
@@ -15,9 +15,10 @@ python run_data_to_text.py \
     --max_target_length 64 \
     --val_max_target_length 64 \
     --save_total_limit 8 \
-    --logging_steps 500 \
+    --logging_steps 1000 \
     --evaluation_strategy "epoch" \
-    --save_strategy "epoch" \
+    --load_best_model_at_end \
+    --metric_for_best_model "F-score" \
     --predict_with_generate \
     --num_beams 5 \
     --do_train --do_eval
