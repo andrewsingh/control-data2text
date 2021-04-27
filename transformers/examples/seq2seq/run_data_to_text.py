@@ -359,6 +359,7 @@ def main():
     config.task_specific_params["e2e"] = default_params
     config.task_specific_params["e2e_dtg_si"] = default_params
     config.task_specific_params["totto"] = default_params
+    config.task_specific_params["totto_proto"] = default_params
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
@@ -552,9 +553,11 @@ def main():
         return round((sum(ppls) / len(ppls)), 4)
 
     def get_output_dir():
-        if trainer.model.training:
+        if trainer.state.global_step > 0:
+            # Still in training loop
             output_dir = f"{os.path.realpath(training_args.output_dir)}/validation_results/{PREFIX_CHECKPOINT_DIR}-{trainer.state.global_step}"
         else:
+            # Running final eval
             output_dir = f"{os.path.realpath(training_args.output_dir)}/eval_results/{os.path.splitext(os.path.basename(data_args.validation_file))[0]}"
         os.makedirs(output_dir, exist_ok=True)
         return output_dir
