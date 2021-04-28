@@ -27,6 +27,7 @@ import csv
 import math
 import random
 import shutil
+import json
 from dataclasses import dataclass, field
 from typing import Optional
 from tqdm import tqdm
@@ -550,7 +551,7 @@ def main():
             inputs = tokenizer(pred, return_tensors='pt').to(device)
             outputs = language_model(**inputs, labels=inputs['input_ids'])
             ppls.append(math.exp(outputs.loss))
-        return round((sum(ppls) / len(ppls)), 4)
+        return float(round((sum(ppls) / len(ppls)), 4))
 
     def get_output_dir():
         if trainer.state.global_step > 0:
@@ -587,6 +588,7 @@ def main():
 
 
     def compute_totto_metrics(eval_preds):
+        print("Computing ToTTo evaluation metrics")
         gpu = "0"
         device = f"cuda:{gpu}"
         output_dir = get_output_dir()
@@ -601,7 +603,7 @@ def main():
             print("Computing m-BLEU")
             bleu_refs = [[ref] for ref in masked_protos]
             bleu_preds = list(map(str.split, masked_preds))
-            m_bleu = tx.evals.corpus_bleu_moses(bleu_refs, bleu_preds, lowercase=True, return_all=False)
+            m_bleu = float(tx.evals.corpus_bleu_moses(bleu_refs, bleu_preds, lowercase=True, return_all=False))
             print(f"m_bleu: {m_bleu}")
         else:
             m_bleu = -1
@@ -617,7 +619,7 @@ def main():
             f.write('\n'.join(normal_preds))
       
         results = subprocess.run(["bash", totto_dir + "/totto_eval.sh", "--prediction_path", parent_preds_file, "--target_path", totto_dir + "/totto_data/totto_dev_data.jsonl", "--output_dir", temp_dir], stdout=subprocess.PIPE)
-        shutil.copyfile(parent_preds_file, f"{output_dir}/validation_preds.txt")
+        shutil.copyfile(parent_preds_file, f"{output_dir}/preds.txt")
         os.remove(parent_preds_file)
 
         print("Computing perplexity")
@@ -638,6 +640,11 @@ def main():
             metric_dict[metric] = get_parent_metric(metric)
         metric_dict["Perplexity"] = ppl
         metric_dict["m-BLEU"] = m_bleu
+
+        with open(f"{output_dir}/results.json", "w+") as f:
+            print(f"\nFinished computing evaluation metrics. Saving results to file: {f.name}\n")
+            json.dump(metric_dict, f, indent=4)
+
         return metric_dict
 
     
