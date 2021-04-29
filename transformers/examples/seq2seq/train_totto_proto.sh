@@ -1,11 +1,11 @@
 export CUDA_VISIBLE_DEVICES=$1
 
 python run_data_to_text.py \
-    --model_name_or_path "exp/totto/totto_k10_t5_small/checkpoint-72000" \
+    --model_name_or_path "exp/totto/totto_k10_t5_small/checkpoint-78000" \
     --task "totto_proto" \
-    --output_dir "exp/totto/totto_k10_t5_small" --overwrite_output_dir \
+    --output_dir "exp/totto/totto_k10_weighted_t5_small_test_2" \
     --train_file "test_data/totto_proto/train_k10.json" \
-    --validation_file "test_data/totto_proto/val_full_source.json" \
+    --validation_file "test_data/totto_proto/val_headers_only.json" \
     --learning_rate 1e-4 \
     --per_device_train_batch_size 32 \
     --gradient_accumulation_steps 1 \
@@ -22,4 +22,5 @@ python run_data_to_text.py \
     --metric_for_best_model "F-score" \
     --predict_with_generate \
     --num_beams 5 \
+    --max_train_samples 100 \
     --do_eval

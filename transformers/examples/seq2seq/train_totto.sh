@@ -3,7 +3,7 @@ export CUDA_VISIBLE_DEVICES=$1
 python run_data_to_text.py \
     --model_name_or_path "t5-small" \
     --task "totto" \
-    --output_dir "exp/totto/totto_bart_base" \
+    --output_dir "exp/totto/totto_t5_small_test" \
     --train_file "test_data/totto/train.json" \
     --validation_file "test_data/totto/validation.json" \
     --learning_rate 1e-4 \

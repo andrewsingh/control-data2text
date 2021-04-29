@@ -41,7 +41,7 @@ class Retriever():
         masked_data.save_to_disk(self.dataset_path)
 
 
-    def add_edit_dist_maps(self, edit_dist_thresh=50, edit_dist_index_size=50, num_proc=1):        
+    def add_edit_dist_maps(self, edit_dist_thresh=50, edit_dist_index_size=25, num_proc=1):        
         def add_edit_dist_map(example):
             dist_map = defaultdict(lambda: [])
             a = example["split_masked_target"]
@@ -81,7 +81,7 @@ class Retriever():
         self.dataset.save_to_disk(self.dataset_path)
 
 
-    def write_train_set(self, out_json, retrieval_k=5, max_edit_dist=None, seed=42):
+    def write_train_set(self, out_json, retrieval_k=5, max_edit_dist=None, weighted=False, seed=42):
         random.seed(seed)
         lines = []
         new_target_lines = []
@@ -96,20 +96,37 @@ class Retriever():
         
         for i in tqdm(range(len(self.dataset))):
             chosen_indices = []
+            if weighted:
+                chosen_edit_dists = []
             for (edit_dist, indices) in list(enumerate(self.dataset[i]["edit_dist_map"]))[:max_edit_dist + 1]:
                 if indices:
                     remaining_indices = retrieval_k - len(chosen_indices)
                     if len(indices) <= remaining_indices:
                         chosen_indices += indices
+                        if weighted:
+                            chosen_edit_dists += [edit_dist] * len(indices)
                     else:
                         chosen_indices += random.sample(indices, remaining_indices)
+                        if weighted:
+                            chosen_edit_dists += [edit_dist] * remaining_indices
                         break
+
+            assert(len(chosen_indices) == len(chosen_edit_dists))
             
-            for proto_idx in chosen_indices:
-                example = {}
-                example["source"] = (self.dataset[proto_idx]["target"] + " [SEP] " + self.dataset[i]["source"]).strip()
-                example["target"] = self.dataset[i]["target"].strip()
-                examples.append(example)
+            if len(chosen_indices) > 0:
+                if weighted:
+                    example = {}
+                    example["source"] = self.dataset[i]["source"].strip()
+                    example["target"] = self.dataset[i]["target"].strip()
+                    example["prototypes"] = " [SEP] ".join([self.dataset[proto_idx]["target"] for proto_idx in chosen_indices])
+                    example["edit_dists"] = chosen_edit_dists
+                    examples.append(example)
+                else:
+                    for proto_idx in chosen_indices:
+                        example = {}
+                        example["source"] = (self.dataset[proto_idx]["target"] + " [SEP] " + self.dataset[i]["source"]).strip()
+                        example["target"] = self.dataset[i]["target"].strip()
+                        examples.append(example)
 
         os.makedirs(os.path.dirname(out_json), exist_ok=True)
 

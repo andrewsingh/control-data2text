@@ -28,6 +28,10 @@ import math
 import random
 import shutil
 import json
+import torch
+import pprint
+import pdb
+pp = pprint.PrettyPrinter(indent=4)
 from dataclasses import dataclass, field
 from typing import Optional
 from tqdm import tqdm
@@ -59,6 +63,8 @@ from transformers.trainer_utils import get_last_checkpoint, is_main_process, PRE
 from transformers.utils import check_min_version
 from sacremoses import MosesDetokenizer
 from dtg_si_trainer import DtgSiTrainer
+from weighted_loss_trainer import WeightedLossTrainer
+from weighted_loss_collator import DataCollatorForWeightedLoss
 
 ROOT_DIR = os.getenv('CTRL_D2T_ROOT')
 sys.path.append(f"{ROOT_DIR}/prototype-retrieval/retrievers")
@@ -248,6 +254,9 @@ class DataTrainingArguments:
     loss_lambda: Optional[float] = field(
         default=None, metadata={"help": "Balancing weight for DTG-SI joint training objective."}
     )
+    weighted_loss: bool = field(
+        default=False, metadata={"help": "Weight the loss by edit distance when doing prototype retrieval."}
+    )
 
     def __post_init__(self):
         if self.dataset_name is None and self.train_file is None and self.validation_file is None:
@@ -327,7 +336,7 @@ def main():
         datasets = load_dataset(data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir)
     else:
         data_files = {}
-        if data_args.train_file is not None:
+        if data_args.train_file is not None and not data_args.weighted_loss:
             data_files["train"] = data_args.train_file
             extension = data_args.train_file.split(".")[-1]
         if data_args.validation_file is not None:
@@ -358,6 +367,7 @@ def main():
         "num_beams": data_args.num_beams, 
     }
     config.task_specific_params["e2e"] = default_params
+    config.task_specific_params["e2e_proto"] = default_params
     config.task_specific_params["e2e_dtg_si"] = default_params
     config.task_specific_params["totto"] = default_params
     config.task_specific_params["totto_proto"] = default_params
@@ -403,7 +413,7 @@ def main():
 
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
-    if training_args.do_train:
+    if training_args.do_train and not data_args.weighted_loss:
         column_names = datasets["train"].column_names
     elif training_args.do_eval:
         column_names = datasets["validation"].column_names
@@ -462,19 +472,51 @@ def main():
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
 
+
+    def weighted_preprocess_function(example):
+        source = example["source"].strip()
+        target = example["target"].strip()
+        prototypes = [proto.strip() for proto in example["prototypes"].split("[SEP]")]
+        edit_dists = example["edit_dists"]
+        inputs = [proto + " [SEP] " + source for proto in prototypes]
+    
+        assert(len(inputs) == len(edit_dists))
+
+        model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=False, truncation=True)
+
+        targets = [target] * len(prototypes)
+        with tokenizer.as_target_tokenizer():
+            labels = tokenizer(targets, max_length=max_target_length, padding=False, truncation=True)
+
+        model_inputs["labels"] = labels["input_ids"]
+        model_inputs["edit_dists"] = edit_dists
+        return model_inputs
+
+
     if training_args.do_train:
-        train_dataset = datasets["train"]
-        if "train" not in datasets:
-            raise ValueError("--do_train requires a train dataset")
+        if data_args.weighted_loss:
+            train_dataset = load_dataset(extension, data_files={"train": data_args.train_file}, cache_dir=model_args.cache_dir)["train"]
+        else:
+            train_dataset = datasets["train"]
+            if "train" not in datasets:
+                raise ValueError("--do_train requires a train dataset")
         if data_args.max_train_samples is not None:
             train_dataset = train_dataset.select(range(data_args.max_train_samples))
-        train_dataset = train_dataset.map(
-            preprocess_function,
-            batched=True,
-            num_proc=data_args.preprocessing_num_workers,
-            remove_columns=column_names,
-            load_from_cache_file=not data_args.overwrite_cache,
-        )
+        if data_args.weighted_loss:
+            train_dataset = train_dataset.map(
+                weighted_preprocess_function,
+                batched=False,
+                remove_columns=list(train_dataset.features.keys()),
+                load_from_cache_file=not data_args.overwrite_cache,
+            )
+        else:
+            train_dataset = train_dataset.map(
+                preprocess_function,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                remove_columns=column_names,
+                load_from_cache_file=not data_args.overwrite_cache,
+            )
 
     if training_args.do_eval:
         max_target_length = data_args.val_max_target_length
@@ -508,12 +550,20 @@ def main():
 
     # Data collator
     label_pad_token_id = -100 if data_args.ignore_pad_token_for_loss else tokenizer.pad_token_id
-    data_collator = DataCollatorForSeq2Seq(
-        tokenizer,
-        model=model,
-        label_pad_token_id=label_pad_token_id,
-        pad_to_multiple_of=8 if training_args.fp16 else None,
-    )
+    if data_args.weighted_loss:
+        data_collator = DataCollatorForWeightedLoss(
+            tokenizer,
+            model=model,
+            label_pad_token_id=label_pad_token_id,
+            pad_to_multiple_of=8 if training_args.fp16 else None,
+        )
+    else:
+        data_collator = DataCollatorForSeq2Seq(
+            tokenizer,
+            model=model,
+            label_pad_token_id=label_pad_token_id,
+            pad_to_multiple_of=8 if training_args.fp16 else None,
+        )
 
     # Metric
     
@@ -739,6 +789,18 @@ def main():
         training_args.max_target_length = data_args.max_target_length
         training_args.per_device_train_batch_size = 1
         trainer = DtgSiTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset if training_args.do_train else None,
+            eval_dataset=eval_dataset if training_args.do_eval else None,
+            tokenizer=tokenizer,
+            data_collator=data_collator,
+            compute_metrics=metrics_fn if training_args.predict_with_generate else None,
+        )
+    elif data_args.weighted_loss:
+        training_args.per_device_train_batch_size = 1
+        training_args.remove_unused_columns = False
+        trainer = WeightedLossTrainer(
             model=model,
             args=training_args,
             train_dataset=train_dataset if training_args.do_train else None,
