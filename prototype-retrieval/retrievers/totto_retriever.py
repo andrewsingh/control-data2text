@@ -44,18 +44,25 @@ class TottoRetriever(Retriever):
         return " ".join(final_toks)
 
 
-    def write_eval_set(self, out_json, retrieval_embed="source_embed", eval_k=40, gpu=None):
-        self.dataset = datasets.load_from_disk(self.dataset_path)
+    def write_eval_set(self, out_json, retrieval_embed="source_embed", retrieval_path=None, eval_k=40, gpu=None):
         if retrieval_embed not in self.dataset[0]:
-            print("Retrieval embeddings not in index, adding them now")
+            print("Retrieval embeddings not in own dataset, adding them now")
             self.add_embeds(retrieval_embed.replace("_embed", ""), gpu=gpu)
-            print("Retrieval embeddings added, creating eval dataset")
+            print("Retrieval embeddings added to own dataset")
+        if retrieval_path:
+            retrieval_dataset = datasets.load_from_disk(retrieval_path)
+        else:
+            retrieval_dataset = self.dataset
 
-        self.dataset.add_faiss_index(column=retrieval_embed)
+        if retrieval_embed not in retrieval_dataset[0]:
+            print("Error: retrieval embeddings not in retrieval dataset. Please add them and try again.")
+            return
+
+        retrieval_dataset.add_faiss_index(column=retrieval_embed)
         examples = []
         
         for i in tqdm(range(len(self.dataset))):
-            results = self.dataset.get_nearest_examples(retrieval_embed, np.array(self.dataset[i][retrieval_embed], dtype=np.float32), k=eval_k)
+            results = retrieval_dataset.get_nearest_examples(retrieval_embed, np.array(self.dataset[i][retrieval_embed], dtype=np.float32), k=eval_k)
 
             proto_start = 1
             if retrieval_embed == "source_embed":

@@ -728,7 +728,7 @@ def main():
         decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
         normal_preds = postprocess_e2e_preds(decoded_preds)
 
-        preds_file = f"{output_dir}/validation_preds.txt"
+        preds_file = f"{output_dir}/preds.txt"
         with open(preds_file, "w+") as f:
             f.writelines([pred + "\n" for pred in normal_preds])
 
@@ -738,19 +738,34 @@ def main():
         print("Preparing predictions for content classifier")
         subprocess.run(["python", prepare_preds_content_path, "--input_path", preds_file, "--output_path", output_dir])
 
-        print("Running content classifier")
-        subprocess.run(["bash", predict_e2e_content_path, gpu, output_dir, f"{output_dir}/validation_preds_content.1.csv"])
-        subprocess.run(["bash", predict_e2e_content_path, gpu, output_dir, f"{output_dir}/validation_preds_content.2.csv"])
-
         content_results_1 = f"{output_dir}/test_results_validation_preds_content.1.csv.txt"
         content_results_2 = f"{output_dir}/test_results_validation_preds_content.2.csv.txt"
 
-        inc_new = compute_accuracy(content_results_1, 1)
-        exc_old = compute_accuracy(content_results_2, 0)
+        attempts = 0
+        while not os.path.exists(content_results_1):
+            if attempts >= 3:
+                break
+            print(f"Running content classifier for file 1 (attempt {attempts + 1})")
+            subprocess.run(["bash", predict_e2e_content_path, gpu, output_dir, f"{output_dir}/validation_preds_content.1.csv"])
+            attempts += 1
 
-        os.remove(content_results_1)
-        os.remove(content_results_2)
-        
+        attempts = 0
+        while not os.path.exists(content_results_2):
+            if attempts >= 3:
+                break
+            print(f"Running content classifier for file 2 (attempt {attempts + 1})")
+            subprocess.run(["bash", predict_e2e_content_path, gpu, output_dir, f"{output_dir}/validation_preds_content.2.csv"])
+            attempts += 1
+
+        inc_new = -1
+        exc_old = -1
+        if os.path.exists(content_results_1):
+            inc_new = compute_accuracy(content_results_1, 1)
+            os.remove(content_results_1)
+        if os.path.exists(content_results_2):
+            exc_old = compute_accuracy(content_results_2, 0)
+            os.remove(content_results_2)
+
         print("Computing m-BLEU")
         eval_style_path = f"{ROOT_DIR}/DTG-SI/evaluate_e2e_style.py"
         eval_style_results = subprocess.run(["python", eval_style_path, "--preds_path", preds_file], stdout=subprocess.PIPE)
@@ -771,6 +786,11 @@ def main():
             "m-BLEU": m_bleu,
             "Perplexity": ppl
         }
+
+        with open(f"{output_dir}/results.json", "w+") as f:
+            print(f"\nFinished computing evaluation metrics. Saving results to file: {f.name}\n")
+            json.dump(metric_dict, f, indent=4)
+
         return metric_dict
         
 

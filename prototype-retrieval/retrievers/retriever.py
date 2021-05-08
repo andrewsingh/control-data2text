@@ -33,19 +33,24 @@ class Retriever():
 
     def add_masked_targets(self, num_proc=1):
         def add_masked_target(example):
-            masked_target = Retriever.mask_target(example["source"], example["target"])
+            masked_target = self.__class__.mask_target(example["source"], example["target"])
             split_masked_target = masked_target.split()
             return {"masked_target": masked_target, "split_masked_target": split_masked_target}
 
-        masked_data = self.dataset.map(add_masked_target, num_proc=num_proc)
-        masked_data.save_to_disk(self.dataset_path)
+        self.dataset = self.dataset.map(add_masked_target, num_proc=num_proc)
+        self.dataset.save_to_disk(self.dataset_path)
 
 
-    def add_edit_dist_maps(self, edit_dist_thresh=50, edit_dist_index_size=25, num_proc=1):        
+    def add_edit_dist_maps(self, retrieval_path=None, map_name="edit_dist_map", edit_dist_thresh=50, edit_dist_index_size=25, num_proc=1):        
+        if retrieval_path:
+            retrieval_dataset = datasets.load_from_disk(retrieval_path)
+        else:
+            retrieval_dataset = self.dataset
+        
         def add_edit_dist_map(example):
             dist_map = defaultdict(lambda: [])
             a = example["split_masked_target"]
-            for i, b in enumerate(self.dataset["split_masked_target"]):
+            for i, b in enumerate(retrieval_dataset["split_masked_target"]):
                 edit_dist = editdistance.eval(a, b)
                 dist_map[edit_dist].append(i)
             dist_map.pop(0, None)
@@ -62,7 +67,8 @@ class Retriever():
             for dist, indices in dist_list:
                 if dist <= edit_dist_index_size:
                     edit_dist_map[dist] = indices
-            return {"edit_dist_map": edit_dist_map}
+            
+            return {map_name: edit_dist_map}
 
         self.dataset = self.dataset.map(add_edit_dist_map, num_proc=num_proc)
         self.dataset.save_to_disk(self.dataset_path)
@@ -81,24 +87,34 @@ class Retriever():
         self.dataset.save_to_disk(self.dataset_path)
 
 
-    def write_train_set(self, out_json, retrieval_k=5, max_edit_dist=None, weighted=False, seed=42):
+    def write_train_set(self, out_json, retrieval_path=None, map_name="edit_dist_map", retrieval_k=5, max_edit_dist=None, weighted=False, seed=42):
+        if retrieval_path:
+            retrieval_dataset = datasets.load_from_disk(retrieval_path)
+        else:
+            retrieval_dataset = self.dataset
+        
         random.seed(seed)
         lines = []
         new_target_lines = []
         examples = []
 
-        if "edit_dist_map" not in self.dataset[0]:
-            print("Edit distance maps not in index, adding them now...")
-            self.add_edit_dist_maps()
+        if map_name not in self.dataset[0]:
+            if not retrieval_path:
+                print("Edit distance maps not in index, adding them now.")
+                self.add_edit_dist_maps()
+            else:
+                print("Error: edit distance maps not in index, pleased add them and try again.")
+                return
+            
 
         if not max_edit_dist:
-            max_edit_dist = len(self.dataset[0]["edit_dist_map"])
+            max_edit_dist = len(self.dataset[0][map_name])
         
         for i in tqdm(range(len(self.dataset))):
             chosen_indices = []
             if weighted:
                 chosen_edit_dists = []
-            for (edit_dist, indices) in list(enumerate(self.dataset[i]["edit_dist_map"]))[:max_edit_dist + 1]:
+            for (edit_dist, indices) in list(enumerate(self.dataset[i][map_name]))[:max_edit_dist + 1]:
                 if indices:
                     remaining_indices = retrieval_k - len(chosen_indices)
                     if len(indices) <= remaining_indices:
@@ -111,20 +127,21 @@ class Retriever():
                             chosen_edit_dists += [edit_dist] * remaining_indices
                         break
 
-            assert(len(chosen_indices) == len(chosen_edit_dists))
-            
+            if weighted:
+                assert(len(chosen_indices) == len(chosen_edit_dists))
+
             if len(chosen_indices) > 0:
                 if weighted:
                     example = {}
                     example["source"] = self.dataset[i]["source"].strip()
                     example["target"] = self.dataset[i]["target"].strip()
-                    example["prototypes"] = " [SEP] ".join([self.dataset[proto_idx]["target"] for proto_idx in chosen_indices])
+                    example["prototypes"] = " [SEP] ".join([retrieval_dataset[proto_idx]["target"] for proto_idx in chosen_indices])
                     example["edit_dists"] = chosen_edit_dists
                     examples.append(example)
                 else:
                     for proto_idx in chosen_indices:
                         example = {}
-                        example["source"] = (self.dataset[proto_idx]["target"] + " [SEP] " + self.dataset[i]["source"]).strip()
+                        example["source"] = (retrieval_dataset[proto_idx]["target"] + " [SEP] " + self.dataset[i]["source"]).strip()
                         example["target"] = self.dataset[i]["target"].strip()
                         examples.append(example)
 
