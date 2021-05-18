@@ -18,6 +18,7 @@ def get_args():
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--split", type=str, default="train", choices=["train", "validation", "test"])
     parser.add_argument("--map_name", type=str, default="edit_dist_map")
+    parser.add_argument("--col_name", type=str, default="split_masked_target")
     parser.add_argument("--retrieval_path", type=str, default=None)
     parser.add_argument("--gpu", type=int, default=None)
     parser.add_argument("--num_proc", type=int, default=1)
@@ -40,7 +41,7 @@ def main():
         retriever = TottoRetriever(args.dataset_path)
 
     if args.add_edit_dist:
-        retriever.add_edit_dist_maps(retrieval_path=args.retrieval_path, map_name=args.map_name, num_proc=args.num_proc)
+        retriever.add_edit_dist_maps(retrieval_path=args.retrieval_path, map_name=args.map_name, col_name=args.col_name, num_proc=args.num_proc)
 
 if __name__ == '__main__':
     main()

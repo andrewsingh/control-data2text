@@ -574,6 +574,7 @@ def main():
 
     def postprocess_totto_preds(preds):
         normal_preds = [pred.strip() for pred in preds]
+        print(f"\n\nnormal_preds len: {len(normal_preds)}")
         if data_args.task == "totto":
             return normal_preds, None, None
         else:
@@ -668,9 +669,11 @@ def main():
         with open(parent_preds_file, "w+") as f:
             f.write('\n'.join(normal_preds))
       
-        results = subprocess.run(["bash", totto_dir + "/totto_eval.sh", "--prediction_path", parent_preds_file, "--target_path", totto_dir + "/totto_data/totto_dev_data.jsonl", "--output_dir", temp_dir], stdout=subprocess.PIPE)
+        results = subprocess.run(["bash", totto_dir + "/totto_parent_eval.sh", "--prediction_path", parent_preds_file, "--target_path", totto_dir + "/totto_data/totto_dev_data.jsonl", "--output_dir", temp_dir], stdout=subprocess.PIPE)
         shutil.copyfile(parent_preds_file, f"{output_dir}/preds.txt")
         os.remove(parent_preds_file)
+
+        print(f"Results: {str(results.stdout)}")
 
         print("Computing perplexity")
         totto_lm_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
@@ -681,13 +684,17 @@ def main():
         except:
             ppl = -1
 
-        def get_parent_metric(metric):
-            return float(re.search("{} = ([0-9]+.[0-9]+)".format(metric), str(results.stdout)).group(1))
+        def get_parent_metric(results, metric):
+            try:
+                return float(re.search("{} = ([0-9]+.[0-9]+)".format(metric), results).group(1))
+            except:
+                return -1
+
 
         parent_metrics = ["Precision", "Recall", "F-score"]
         metric_dict = {}
         for metric in parent_metrics:
-            metric_dict[metric] = get_parent_metric(metric)
+            metric_dict[metric] = get_parent_metric(str(results.stdout), metric)
         metric_dict["Perplexity"] = ppl
         metric_dict["m-BLEU"] = m_bleu
 
@@ -743,7 +750,7 @@ def main():
 
         attempts = 0
         while not os.path.exists(content_results_1):
-            if attempts >= 3:
+            if attempts >= 2:
                 break
             print(f"Running content classifier for file 1 (attempt {attempts + 1})")
             subprocess.run(["bash", predict_e2e_content_path, gpu, output_dir, f"{output_dir}/validation_preds_content.1.csv"])
@@ -751,7 +758,7 @@ def main():
 
         attempts = 0
         while not os.path.exists(content_results_2):
-            if attempts >= 3:
+            if attempts >= 2:
                 break
             print(f"Running content classifier for file 2 (attempt {attempts + 1})")
             subprocess.run(["bash", predict_e2e_content_path, gpu, output_dir, f"{output_dir}/validation_preds_content.2.csv"])

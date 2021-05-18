@@ -3,6 +3,7 @@ import os
 import editdistance
 import random
 import json
+import numpy as np
 
 from pathlib import Path
 from tqdm import tqdm
@@ -26,6 +27,10 @@ class Retriever():
             raise FileNotFoundError("Could not find path to Hugging Face dataset or JSON file")
 
 
+    def save_dataset(self):
+        self.dataset.save_to_disk(self.dataset_path)
+
+
     @classmethod
     def mask_target(cls, source, target):
         pass
@@ -41,7 +46,8 @@ class Retriever():
         self.dataset.save_to_disk(self.dataset_path)
 
 
-    def add_edit_dist_maps(self, retrieval_path=None, map_name="edit_dist_map", edit_dist_thresh=50, edit_dist_index_size=25, num_proc=1):        
+    def add_edit_dist_maps(self, retrieval_path=None, map_name="edit_dist_map", col_name="split_masked_target", edit_dist_thresh=50, edit_dist_index_size=25, num_proc=1):     
+        print(f"map_name: {map_name}\ncol_name: {col_name}")   
         if retrieval_path:
             retrieval_dataset = datasets.load_from_disk(retrieval_path)
         else:
@@ -49,8 +55,8 @@ class Retriever():
         
         def add_edit_dist_map(example):
             dist_map = defaultdict(lambda: [])
-            a = example["split_masked_target"]
-            for i, b in enumerate(retrieval_dataset["split_masked_target"]):
+            a = example[col_name]
+            for i, b in enumerate(retrieval_dataset[col_name]):
                 edit_dist = editdistance.eval(a, b)
                 dist_map[edit_dist].append(i)
             dist_map.pop(0, None)
@@ -87,7 +93,7 @@ class Retriever():
         self.dataset.save_to_disk(self.dataset_path)
 
 
-    def write_train_set(self, out_json, retrieval_path=None, map_name="edit_dist_map", retrieval_k=5, max_edit_dist=None, weighted=False, seed=42):
+    def write_train_set(self, out_json, retrieval_path=None, retrieval_map=None, retrieval_embed=None, retrieval_k=5, max_edit_dist=None, weighted=False, seed=42, include_all=False):
         if retrieval_path:
             retrieval_dataset = datasets.load_from_disk(retrieval_path)
         else:
@@ -98,52 +104,68 @@ class Retriever():
         new_target_lines = []
         examples = []
 
-        if map_name not in self.dataset[0]:
-            if not retrieval_path:
-                print("Edit distance maps not in index, adding them now.")
-                self.add_edit_dist_maps()
-            else:
-                print("Error: edit distance maps not in index, pleased add them and try again.")
-                return
-            
-
-        if not max_edit_dist:
-            max_edit_dist = len(self.dataset[0][map_name])
-        
-        for i in tqdm(range(len(self.dataset))):
-            chosen_indices = []
-            if weighted:
-                chosen_edit_dists = []
-            for (edit_dist, indices) in list(enumerate(self.dataset[i][map_name]))[:max_edit_dist + 1]:
-                if indices:
-                    remaining_indices = retrieval_k - len(chosen_indices)
-                    if len(indices) <= remaining_indices:
-                        chosen_indices += indices
-                        if weighted:
-                            chosen_edit_dists += [edit_dist] * len(indices)
-                    else:
-                        chosen_indices += random.sample(indices, remaining_indices)
-                        if weighted:
-                            chosen_edit_dists += [edit_dist] * remaining_indices
-                        break
-
-            if weighted:
-                assert(len(chosen_indices) == len(chosen_edit_dists))
-
-            if len(chosen_indices) > 0:
-                if weighted:
-                    example = {}
-                    example["source"] = self.dataset[i]["source"].strip()
-                    example["target"] = self.dataset[i]["target"].strip()
-                    example["prototypes"] = " [SEP] ".join([retrieval_dataset[proto_idx]["target"] for proto_idx in chosen_indices])
-                    example["edit_dists"] = chosen_edit_dists
-                    examples.append(example)
+        if retrieval_map:
+            if retrieval_map not in self.dataset[0]:
+                if not retrieval_path:
+                    print("Edit distance maps not in index, adding them now.")
+                    self.add_edit_dist_maps()
                 else:
-                    for proto_idx in chosen_indices:
+                    print("Error: edit distance maps not in index, pleased add them and try again.")
+                    return
+                
+            if not max_edit_dist:
+                max_edit_dist = len(self.dataset[0][retrieval_map])
+            
+            for i in tqdm(range(len(self.dataset))):
+                chosen_indices = []
+                if weighted:
+                    chosen_edit_dists = []
+                for (edit_dist, indices) in list(enumerate(self.dataset[i][retrieval_map]))[:max_edit_dist + 1]:
+                    if indices:
+                        remaining_indices = retrieval_k - len(chosen_indices)
+                        if len(indices) <= remaining_indices:
+                            chosen_indices += indices
+                            if weighted:
+                                chosen_edit_dists += [edit_dist] * len(indices)
+                        else:
+                            chosen_indices += random.sample(indices, remaining_indices)
+                            if weighted:
+                                chosen_edit_dists += [edit_dist] * remaining_indices
+                            break
+
+                if weighted:
+                    assert(len(chosen_indices) == len(chosen_edit_dists))
+
+                if len(chosen_indices) > 0:
+                    if weighted:
                         example = {}
-                        example["source"] = (retrieval_dataset[proto_idx]["target"] + " [SEP] " + self.dataset[i]["source"]).strip()
+                        example["source"] = self.dataset[i]["source"].strip()
                         example["target"] = self.dataset[i]["target"].strip()
+                        example["prototypes"] = " [SEP] ".join([retrieval_dataset[proto_idx]["target"] for proto_idx in chosen_indices])
+                        example["edit_dists"] = chosen_edit_dists
                         examples.append(example)
+                    else:
+                        for proto_idx in chosen_indices:
+                            example = {}
+                            example["source"] = (retrieval_dataset[proto_idx]["target"] + " [SEP] " + self.dataset[i]["source"]).strip()
+                            example["target"] = self.dataset[i]["target"].strip()
+                            examples.append(example)
+                elif include_all:
+                    example = {}
+                    example["source"] = " [SEP] " + self.dataset[i]["source"].strip()
+                    example["target"] = self.dataset[i]["target"].strip()
+                    examples.append(example)
+        
+        elif retrieval_embed:
+            retrieval_dataset.add_faiss_index(column=retrieval_embed)
+            for i in tqdm(range(len(self.dataset))):
+                results = retrieval_dataset.get_nearest_examples(retrieval_embed, np.array(self.dataset[i][retrieval_embed], dtype=np.float32), k=retrieval_k+1)
+
+                for j in range(1, retrieval_k + 1):
+                    example = {}
+                    example["source"] = (results[1]["target"][j] + " [SEP] " + self.dataset[i]["source"]).strip()
+                    example["target"] = self.dataset[i]["target"].strip()
+                    examples.append(example)
 
         os.makedirs(os.path.dirname(out_json), exist_ok=True)
 
@@ -155,6 +177,8 @@ class Retriever():
 
     def write_eval_set(self, out_dir, eval_k):
         pass
+
+
 
 
 

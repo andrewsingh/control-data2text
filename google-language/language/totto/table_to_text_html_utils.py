@@ -35,7 +35,7 @@ def get_table_style():
                     #f4f4f4 10px,
                     #f4f4f4 20px
                   );}
-           .highlighted { background-color: #ffff99; }
+           .highlighted {color: black; background-color: #ffff99; }
           </style>"""
 
 
